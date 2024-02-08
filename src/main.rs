@@ -258,7 +258,7 @@ impl<T: Copy> Matrix<T> {
             cols: self.cols - 1,
         };
         let mut ro = 0;
-        let mut co = 0;
+        let mut co;
         for row in 0..self.rows {
             if row != r {
                 co = 0;
@@ -405,6 +405,22 @@ fn canvas(w: usize, h: usize) -> Canvas {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Ray {
+    origin: Tuple,
+    direction: Tuple
+}
+
+fn ray(origin: Tuple, direction: Tuple) -> Ray {
+    Ray{origin, direction}
+}
+
+impl Ray {
+    fn position(self, t: f32) -> Tuple {
+        self.origin + self.direction * t
+    }
+}
+
 fn main() {
     println!("Hello, world!");
 }
@@ -413,7 +429,7 @@ fn main() {
 mod tests {
     use std::f32::consts::PI;
 
-    use crate::{canvas, color, identity_matrix, point, tuple, vector, Matrix, translation, scaling, rotation_x, rotation_y, rotation_z, shearing};
+    use crate::{canvas, color, identity_matrix, point, ray, rotation_x, rotation_y, rotation_z, scaling, shearing, translation, tuple, vector, Matrix};
 
     #[test]
     fn is_point() {
@@ -866,5 +882,52 @@ mod tests {
         let transform = shearing(1.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         let p = point(2.0, 3.0, 4.0);
         assert_eq!(point(5.0, 3.0, 4.0), transform * p);
+        let transform = shearing(0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+        let p = point(2.0, 3.0, 4.0);
+        assert_eq!(point(6.0, 3.0, 4.0), transform * p);
+        let transform = shearing(0.0, 0.0, 1.0, 0.0, 0.0, 0.0);
+        let p = point(2.0, 3.0, 4.0);
+        assert_eq!(point(2.0, 5.0, 4.0), transform * p);
+        let transform = shearing(0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        let p = point(2.0, 3.0, 4.0);
+        assert_eq!(point(2.0, 7.0, 4.0), transform * p);
+        let transform = shearing(0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+        let p = point(2.0, 3.0, 4.0);
+        assert_eq!(point(2.0, 3.0, 6.0), transform * p);
+        let transform = shearing(0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+        let p = point(2.0, 3.0, 4.0);
+        assert_eq!(point(2.0, 3.0, 7.0), transform * p);
+    }
+
+    #[test]
+    fn sequence() {
+        let p = point(1.0, 0.0, 1.0);
+        let a = rotation_x(PI / 2.0);
+        let b = scaling(5.0, 5.0, 5.0);
+        let c = translation(10.0, 5.0, 7.0);
+        let p2 = a * p;
+        assert_eq!(p2, point(1.0, -1.0, -4.371139e-8));
+        let p3 = b * p2;
+        assert_eq!(p3, point(5.0, -5.0, -2.1855695e-7));
+        let p4 = c * p3;
+        assert_eq!(p4, point(15.0, 0.0, 7.0));
+    }
+
+    #[test]
+    fn ray_creation() {
+        let origin = point(1.0, 2.0, 3.0);
+        let direction = vector(4.0, 5.0, 6.0);
+        let r = ray(origin, direction);
+        assert_eq!(origin, r.origin);
+        assert_eq!(direction, r.direction);
+    }
+
+    #[test]
+    fn ray_position() {
+        let r = ray(point(2.0, 3.0, 4.0), vector(1.0, 0.0, 0.0));
+        assert_eq!(r.position(0.0), point(2.0, 3.0, 4.0));
+        assert_eq!(r.position(1.0), point(3.0, 3.0, 4.0));
+        assert_eq!(r.position(-1.0), point(1.0, 3.0, 4.0));
+        assert_eq!(r.position(2.5), point(4.5, 3.0, 4.0));
     }
 }
