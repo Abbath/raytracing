@@ -1,6 +1,8 @@
+use std::f32::EPSILON;
+use std::iter::Once;
 use std::ops;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct Tuple {
     x: f32,
     y: f32,
@@ -36,6 +38,16 @@ impl Tuple {
             self.z * other.x - self.x * other.z,
             self.x * other.y - self.y * other.x,
         )
+    }
+    fn reflect(self, normal: Tuple) -> Tuple {
+        self - normal * 2.0 * self.dot(normal)
+    }
+}
+
+impl PartialEq<Tuple> for Tuple {
+    fn eq(&self, other: &Tuple) -> bool {
+        let f = |a: f32, b: f32| (a - b).abs() < 0.00001;
+        f(self.x, other.x) && f(self.y, other.y) && f(self.z, other.z) && self.w == other.w
     }
 }
 
@@ -205,10 +217,6 @@ fn shearing(x_y: f32, x_z: f32, y_x: f32, y_z: f32, z_x: f32, z_y: f32) -> Matri
 }
 
 impl<T: Copy> Matrix2x2<T> {
-    fn at(&self, r: usize, c: usize) -> T {
-        let idx = r * 2 + c;
-        self.data[idx]
-    }
     fn set(&mut self, r: usize, c: usize, val: T) {
         let idx = r * 2 + c;
         self.data[idx] = val;
@@ -427,11 +435,11 @@ fn clamp_color(c: f32) -> u8 {
 
 impl Canvas {
     fn pixel_at(self, x: usize, y: usize) -> Tuple {
-        let idx = x * self.h + y;
+        let idx = y * self.w + x;
         self.m[idx]
     }
     fn write_pixel(&mut self, x: usize, y: usize, c: Tuple) {
-        let idx = x * self.h + y;
+        let idx = y * self.w + x;
         self.m[idx] = c;
     }
     fn to_ppm(&self) -> String {
@@ -486,6 +494,7 @@ struct Sphere {
     origin: Tuple,
     radius: f32,
     transform: Matrix4x4<f32>,
+    material: Material,
 }
 
 fn sphere() -> Sphere {
@@ -493,6 +502,7 @@ fn sphere() -> Sphere {
         origin: point(0.0, 0.0, 0.0),
         radius: 1.0,
         transform: identity_matrix(),
+        material: material(),
     }
 }
 
@@ -510,27 +520,34 @@ impl Sphere {
         let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
         let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
         intersections![
-            intersection(t1, InterObject::S(self)),
-            intersection(t2, InterObject::S(self))
+            intersection(t1, Object::S(self)),
+            intersection(t2, Object::S(self))
         ]
     }
     fn set_transform(&mut self, t: Matrix4x4<f32>) {
         self.transform = t;
     }
+    fn normal_at(self, wp: Tuple) -> Tuple {
+        let op = self.transform.inverse() * wp;
+        let on = op - self.origin;
+        let mut wn = self.transform.inverse().transposed() * on;
+        wn.w = 0.0;
+        wn.normalize()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum InterObject {
+enum Object {
     S(Sphere),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Intersection {
     t: f32,
-    object: InterObject,
+    object: Object,
 }
 
-fn intersection(t: f32, o: InterObject) -> Intersection {
+fn intersection(t: f32, o: Object) -> Intersection {
     Intersection { t, object: o }
 }
 
@@ -552,16 +569,268 @@ fn hit(xs: Vec<Intersection>) -> Option<Intersection> {
     }
 }
 
-fn main() {
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Light {
+    position: Tuple,
+    intensity: Tuple,
+}
+
+fn point_light(position: Tuple, intensity: Tuple) -> Light {
+    Light {
+        position,
+        intensity,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Material {
+    color: Tuple,
+    ambient: f32,
+    diffuse: f32,
+    specular: f32,
+    shininess: f32,
+}
+
+fn material() -> Material {
+    Material {
+        color: color(1.0, 1.0, 1.0),
+        ambient: 0.1,
+        diffuse: 0.9,
+        specular: 0.9,
+        shininess: 200.0,
+    }
+}
+
+fn black() -> Tuple {
+    color(0.0, 0.0, 0.0)
+}
+
+fn lighting(mat: Material, light: Light, p: Tuple, eyev: Tuple, normalv: Tuple, in_shadow: bool) -> Tuple {
+    let eff_color = mat.color * light.intensity;
+    let lightv = (light.position - p).normalize();
+    let ambient = eff_color * mat.ambient;
+    let light_dot_normal = lightv.dot(normalv);
+    let diffuse: Tuple;
+    let specular: Tuple;
+    if light_dot_normal < 0.0 {
+        diffuse = black();
+        specular = black();
+    } else {
+        diffuse = eff_color * mat.diffuse * light_dot_normal;
+        let reflectv = (-lightv).reflect(normalv);
+        let reflect_dot_eye = reflectv.dot(eyev);
+        if reflect_dot_eye <= 0.0 {
+            specular = black();
+        } else {
+            let factor = reflect_dot_eye.powf(mat.shininess);
+            specular = light.intensity * mat.specular * factor;
+        }
+    }
+    if in_shadow {
+        return ambient;
+    }
+    ambient + diffuse + specular
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct World {
+    light: Option<Light>,
+    objects: Vec<Object>,
+}
+
+fn world() -> World {
+    World {
+        light: None,
+        objects: vec![],
+    }
+}
+
+fn default_world() -> World {
+    let mut w = world();
+    w.light = Some(point_light(
+        point(-10.0, 10.0, -10.0),
+        color(1.0, 1.0, 1.0),
+    ));
+    let mut s1 = sphere();
+    s1.material.color = color(0.8, 1.0, 0.6);
+    s1.material.diffuse = 0.7;
+    s1.material.specular = 0.2;
+    w.objects.push(Object::S(s1));
+    let mut s2 = sphere();
+    s2.set_transform(scaling(0.5, 0.5, 0.5));
+    w.objects.push(Object::S(s2));
+    w
+}
+
+impl World {
+    fn intersect(&self, r: Ray) -> Vec<Intersection> {
+        let mut v: Vec<Intersection> = self
+            .objects
+            .iter()
+            .flat_map(|o| match o {
+                Object::S(s) => s.intersect(r),
+            })
+            .collect();
+        v.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+        v
+    }
+    fn shade_hit(&self, comps: Computations) -> Tuple {
+        lighting(
+            match comps.object {
+                Object::S(s) => s.material,
+            },
+            self.light.unwrap(),
+            comps.over_point,
+            comps.eyev,
+            comps.normalv,
+            self.is_shadowed(comps.over_point)
+        )
+    }
+    fn color_at(&self, r: Ray) -> Tuple {
+        let xs = self.intersect(r);
+        if let Some(x) = hit(xs) {
+            let comps = x.prepare_computations(r);
+            self.shade_hit(comps)
+        } else {
+            black()
+        }
+    }
+    fn is_shadowed(&self, p: Tuple) -> bool {
+        let v = self.light.unwrap().position - p;
+        let distance = v.magnitude();
+        let direction = v.normalize();
+        let r = ray(p, direction);
+        let xs = self.intersect(r);
+        if let Some(h) = hit(xs) {
+            if h.t < distance {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Computations {
+    t: f32,
+    object: Object,
+    point: Tuple,
+    eyev: Tuple,
+    normalv: Tuple,
+    inside: bool,
+    over_point: Tuple
+}
+
+impl Intersection {
+    fn prepare_computations(&self, r: Ray) -> Computations {
+        let p = r.position(self.t);
+        let mut comps = Computations {
+            t: self.t,
+            object: self.object,
+            point: p,
+            eyev: -r.direction,
+            normalv: match self.object {
+                Object::S(s) => s.normal_at(p),
+            },
+            inside: false,
+            over_point: point(0.0, 0.0, 0.0)
+        };
+        if comps.normalv.dot(comps.eyev) < 0.0 {
+            comps.inside = true;
+            comps.normalv = -comps.normalv
+        }
+        comps.over_point = comps.point + comps.normalv * 0.00001;
+        comps
+    }
+}
+
+fn view_transform(from: Tuple, to: Tuple, up: Tuple) -> Matrix4x4<f32> {
+    let forward = (to - from).normalize();
+    let upn = up.normalize();
+    let left = forward.cross(upn);
+    let true_up = left.cross(forward);
+    let orientation = Matrix4x4::<f32> {
+        data: [
+            left.x, left.y, left.z, 0.0, true_up.x, true_up.y, true_up.z, 0.0, -forward.x,
+            -forward.y, -forward.z, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+    };
+    orientation * translation(-from.x, -from.y, -from.z)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Camera {
+    hsize: usize,
+    vsize: usize,
+    field_of_view: f32,
+    transform: Matrix4x4<f32>,
+    half_width: f32,
+    half_height: f32,
+    pixel_size: f32,
+}
+
+fn camera(hsize: usize, vsize: usize, field_of_view: f32) -> Camera {
+    let mut c = Camera {
+        hsize,
+        vsize,
+        field_of_view,
+        transform: identity_matrix(),
+        half_width: 0.0,
+        half_height: 0.0,
+        pixel_size: 0.0,
+    };
+    let half_view = (c.field_of_view / 2.0).tan();
+    let aspect = c.hsize as f32 / c.vsize as f32;
+    if aspect >= 1.0 {
+        c.half_width = half_view;
+        c.half_height = half_view / aspect;
+    } else {
+        c.half_width = half_view * aspect;
+        c.half_height = half_view;
+    }
+    c.pixel_size = (c.half_width * 2.0) / c.hsize as f32;
+    c
+}
+
+impl Camera {
+    fn ray_for_pixel(&self, px: usize, py: usize) -> Ray {
+        let xoffset = (px as f32 + 0.5) * self.pixel_size;
+        let yoffset = (py as f32 + 0.5) * self.pixel_size;
+        let world_x = self.half_width - xoffset;
+        let world_y = self.half_height - yoffset;
+        let pixel = self.transform.inverse() * point(world_x, world_y, -1.0);
+        let origin = self.transform.inverse() * point(0.0, 0.0, 0.0);
+        let direction = (pixel - origin).normalize();
+        Ray { origin, direction }
+    }
+}
+
+fn render(c: Camera, w: World) -> Canvas {
+    let mut image = canvas(c.hsize, c.vsize);
+    for y in 0..c.vsize {
+        for x in 0..c.hsize {
+            let r = c.ray_for_pixel(x, y);
+            let color = w.color_at(r);
+            image.write_pixel(x, y, color);
+        }
+    }
+    image
+}
+
+fn main1() {
     let ray_origin = point(0.0, 0.0, -5.0);
     let wall_z = 10.0;
     let wall_size = 7.0;
-    let canvas_pixels = 100;
+    let canvas_pixels = 256;
     let pixel_size = wall_size / canvas_pixels as f32;
     let half = wall_size / 2.0;
     let mut canvas = canvas(canvas_pixels, canvas_pixels);
-    let color = color(1.0, 0.0, 0.0);
-    let shape = sphere();
+    let mut shape = sphere();
+    shape.material = material();
+    shape.material.color = color(1.0, 0.2, 1.0);
+    let light_pos = point(-10.0, 10.0, -10.0);
+    let light_col = color(1.0, 1.0, 1.0);
+    let light = point_light(light_pos, light_col);
     for y in 0..canvas_pixels {
         let world_y = half - pixel_size * y as f32;
         for x in 0..canvas_pixels {
@@ -569,11 +838,75 @@ fn main() {
             let position = point(world_x, world_y, wall_z);
             let r = ray(ray_origin, (position - ray_origin).normalize());
             let xs = shape.intersect(r);
-            if hit(xs).is_some() {
-                canvas.write_pixel(x, y, color);
+            if let Some(t) = hit(xs) {
+                let p = r.position(t.t);
+                let Object::S(s) = t.object;
+                let norm = s.normal_at(p);
+                let eye = -r.direction;
+                let colr = lighting(s.material, light, p, eye, norm, false);
+                canvas.write_pixel(x, y, colr);
             }
         }
     }
+    println!("{}", canvas.to_ppm());
+}
+
+fn main() {
+    use std::f32::consts::PI;
+    let mut floor = sphere();
+    floor.transform = scaling(10.0, 0.01, 10.0);
+    floor.material = material();
+    floor.material.color = color(1.0, 0.9, 0.9);
+    floor.material.specular = 0.0;
+
+    let mut left_wall = sphere();
+    left_wall.transform = translation(0.0, 0.0, 5.0)
+        * rotation_y(-PI / 4.0)
+        * rotation_x(PI / 2.0)
+        * scaling(10.0, 0.01, 10.0);
+    left_wall.material = floor.material;
+
+    let mut right_wall = sphere();
+    right_wall.transform = translation(0.0, 0.0, 5.0)
+        * rotation_y(PI / 4.0)
+        * rotation_x(PI / 2.0)
+        * scaling(10.0, 0.01, 10.0);
+    right_wall.material = floor.material;
+
+    let mut middle = sphere();
+    middle.transform = translation(-0.5, 1.0, 0.5);
+    middle.material = material();
+    middle.material.color = color(0.1, 1.0, 0.5);
+    middle.material.diffuse = 0.7;
+    middle.material.specular = 0.3;
+
+    let mut right = sphere();
+    right.transform = translation(1.5, 0.5, -0.5) * scaling(0.5, 0.5, 0.5);
+    right.material = material();
+    right.material.color = color(0.5, 1.0, 0.1);
+    right.material.diffuse = 0.7;
+    right.material.specular = 0.3;
+
+    let mut left = sphere();
+    left.transform = translation(-1.5, 0.33, -0.75) * scaling(0.33, 0.33, 0.33);
+    left.material = material();
+    left.material.color = color(1.0, 0.8, 0.1);
+    left.material.diffuse = 0.7;
+    left.material.specular = 0.3;
+
+    let mut w = world();
+    w.light = Some(point_light(point(-10.0, 10.0, -10.0), color(1.0, 1.0, 1.0)));
+    w.objects = vec![floor, left_wall, right_wall, middle, right, left]
+        .iter()
+        .map(|&s| Object::S(s))
+        .collect();
+    let mut cam = camera(1000, 500, PI / 3.0);
+    cam.transform = view_transform(
+        point(0.0, 1.5, -5.0),
+        point(0.0, 1.0, 0.0),
+        vector(0.0, 1.0, 0.0),
+    );
+    let canvas = render(cam, w);
     println!("{}", canvas.to_ppm());
 }
 
@@ -582,9 +915,7 @@ mod tests {
     use std::f32::consts::PI;
 
     use crate::{
-        canvas, color, hit, identity_matrix, intersection, intersections, point, ray, rotation_x,
-        rotation_y, rotation_z, scaling, shearing, sphere, translation, tuple, vector, Matrix2x2,
-        Matrix3x3, Matrix4x4,
+        camera, canvas, color, default_world, hit, identity_matrix, intersection, intersections, lighting, material, point, point_light, ray, render, rotation_x, rotation_y, rotation_z, scaling, shearing, sphere, translation, tuple, vector, view_transform, world, Matrix2x2, Matrix3x3, Matrix4x4, Object
     };
 
     #[test]
@@ -665,7 +996,7 @@ mod tests {
             ),
             vector(1.0, 2.0, 3.0).normalize()
         );
-        assert!((1.0 - vector(1.0, 2.0, 3.0).normalize().magnitude()).abs() < f32::EPSILON);
+        assert!((1.0 - vector(1.0, 2.0, 3.0).normalize().magnitude()).abs() < 0.00001);
     }
 
     #[test]
@@ -684,7 +1015,7 @@ mod tests {
     #[test]
     fn multiply_colors() {
         assert_eq!(
-            vector(0.9, 0.2, 0.040000003),
+            vector(0.9, 0.2, 0.04),
             vector(1.0, 0.2, 0.4) * vector(0.9, 1.0, 0.1)
         );
     }
@@ -973,7 +1304,7 @@ mod tests {
             point(0.0, 2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
             half_quarter.clone() * p
         );
-        assert_eq!(point(0.0, -4.371139e-8, 1.0), full_quarter * p);
+        assert_eq!(point(0.0, 0.0, 1.0), full_quarter * p);
         let inv = half_quarter.inverse();
         assert_eq!(point(0.0, 0.7071068, -0.7071068), inv * p);
         let p = point(0.0, 0.0, 1.0);
@@ -983,7 +1314,7 @@ mod tests {
             point(2f32.sqrt() / 2.0, 0.0, 2f32.sqrt() / 2.0),
             half_quarter.clone() * p
         );
-        assert_eq!(point(1.0, 0.0, -4.371139e-8), full_quarter * p);
+        assert_eq!(point(1.0, 0.0, 0.0), full_quarter * p);
         let p = point(0.0, 1.0, 0.0);
         let half_quarter = rotation_z(PI / 4.0);
         let full_quarter = rotation_z(PI / 2.0);
@@ -991,7 +1322,7 @@ mod tests {
             point(-2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0, 0.0),
             half_quarter.clone() * p
         );
-        assert_eq!(point(-1.0, -4.371139e-8, 0.0), full_quarter * p);
+        assert_eq!(point(-1.0, 0.0, 0.0), full_quarter * p);
     }
 
     #[test]
@@ -1023,9 +1354,9 @@ mod tests {
         let b = scaling(5.0, 5.0, 5.0);
         let c = translation(10.0, 5.0, 7.0);
         let p2 = a * p;
-        assert_eq!(p2, point(1.0, -1.0, -4.371139e-8));
+        assert_eq!(p2, point(1.0, -1.0, 0.0));
         let p3 = b * p2;
-        assert_eq!(p3, point(5.0, -5.0, -2.1855695e-7));
+        assert_eq!(p3, point(5.0, -5.0, 0.0));
         let p4 = c * p3;
         assert_eq!(p4, point(15.0, 0.0, 7.0));
     }
@@ -1099,8 +1430,8 @@ mod tests {
         let s = sphere();
         let xs = s.intersect(r);
         if xs.len() == 2 {
-            assert_eq!(xs[0].object, crate::InterObject::S(s));
-            assert_eq!(xs[1].object, crate::InterObject::S(s));
+            assert_eq!(xs[0].object, crate::Object::S(s));
+            assert_eq!(xs[1].object, crate::Object::S(s));
         } else {
             assert!(false);
         }
@@ -1109,13 +1440,13 @@ mod tests {
     #[test]
     fn aggregate_intersections() {
         let s = sphere();
-        let i = intersection(3.5, crate::InterObject::S(s));
+        let i = intersection(3.5, crate::Object::S(s));
         assert_eq!(i.t, 3.5);
-        assert_eq!(i.object, crate::InterObject::S(s));
+        assert_eq!(i.object, crate::Object::S(s));
 
         let s = sphere();
-        let i1 = intersection(1.0, crate::InterObject::S(s));
-        let i2 = intersection(2.0, crate::InterObject::S(s));
+        let i1 = intersection(1.0, crate::Object::S(s));
+        let i2 = intersection(2.0, crate::Object::S(s));
         let xs = intersections![i1, i2];
         assert_eq!(xs[0].t, 1.0);
         assert_eq!(xs[1].t, 2.0);
@@ -1124,8 +1455,8 @@ mod tests {
     #[test]
     fn hits() {
         let s = sphere();
-        let i1 = intersection(1.0, crate::InterObject::S(s));
-        let i2 = intersection(2.0, crate::InterObject::S(s));
+        let i1 = intersection(1.0, crate::Object::S(s));
+        let i2 = intersection(2.0, crate::Object::S(s));
         let xs = intersections![i1, i2];
         if let Some(i) = hit(xs) {
             assert_eq!(i, i1);
@@ -1134,8 +1465,8 @@ mod tests {
         }
 
         let s = sphere();
-        let i1 = intersection(-1.0, crate::InterObject::S(s));
-        let i2 = intersection(1.0, crate::InterObject::S(s));
+        let i1 = intersection(-1.0, crate::Object::S(s));
+        let i2 = intersection(1.0, crate::Object::S(s));
         let xs = intersections![i1, i2];
         if let Some(i) = hit(xs) {
             assert_eq!(i, i2);
@@ -1144,18 +1475,18 @@ mod tests {
         }
 
         let s = sphere();
-        let i1 = intersection(-2.0, crate::InterObject::S(s));
-        let i2 = intersection(-1.0, crate::InterObject::S(s));
+        let i1 = intersection(-2.0, crate::Object::S(s));
+        let i2 = intersection(-1.0, crate::Object::S(s));
         let xs = intersections![i1, i2];
         if let Some(_) = hit(xs) {
             assert!(false);
         }
 
         let s = sphere();
-        let i1 = intersection(5.0, crate::InterObject::S(s));
-        let i2 = intersection(7.0, crate::InterObject::S(s));
-        let i3 = intersection(-3.0, crate::InterObject::S(s));
-        let i4 = intersection(2.0, crate::InterObject::S(s));
+        let i1 = intersection(5.0, crate::Object::S(s));
+        let i2 = intersection(7.0, crate::Object::S(s));
+        let i3 = intersection(-3.0, crate::Object::S(s));
+        let i4 = intersection(2.0, crate::Object::S(s));
         let xs = intersections![i1, i2, i3, i4];
         if let Some(i) = hit(xs) {
             assert_eq!(i, i4);
@@ -1215,5 +1546,355 @@ mod tests {
         } else {
             assert!(false);
         }
+    }
+
+    #[test]
+    fn sphere_normals() {
+        let s = sphere();
+        let n = s.normal_at(point(1.0, 0.0, 0.0));
+        assert_eq!(n, vector(1.0, 0.0, 0.0));
+
+        let s = sphere();
+        let n = s.normal_at(point(0.0, 1.0, 0.0));
+        assert_eq!(n, vector(0.0, 1.0, 0.0));
+
+        let s = sphere();
+        let n = s.normal_at(point(0.0, 0.0, 1.0));
+        assert_eq!(n, vector(0.0, 0.0, 1.0));
+
+        let s = sphere();
+        let n = s.normal_at(point(
+            3.0f32.sqrt() / 3.0,
+            3.0f32.sqrt() / 3.0,
+            3.0f32.sqrt() / 3.0,
+        ));
+        assert_eq!(n, vector(0.5773503, 0.5773503, 0.5773503));
+
+        let s = sphere();
+        let n = s.normal_at(point(
+            3.0f32.sqrt() / 3.0,
+            3.0f32.sqrt() / 3.0,
+            3.0f32.sqrt() / 3.0,
+        ));
+        assert_eq!(n, n.normalize().normalize());
+    }
+
+    #[test]
+    fn normals_translated() {
+        let mut s = sphere();
+        s.set_transform(translation(0.0, 1.0, 0.0));
+        let n = s.normal_at(point(0.0, 1.70711, -0.70711));
+        assert_eq!(n, vector(0.0, 0.7071068, -0.70710677));
+
+        let mut s = sphere();
+        let m = scaling(1.0, 0.5, 1.0) * rotation_z(PI / 5.0);
+        s.set_transform(m);
+        let n = s.normal_at(point(0.0, 2f32.sqrt() / 2.0, -2f32.sqrt() / 2.0));
+        assert_eq!(n, vector(0.0, 0.97014254, -0.24253564));
+    }
+
+    #[test]
+    fn vector_reflection() {
+        let v = vector(1.0, -1.0, 0.0);
+        let n = vector(0.0, 1.0, 0.0);
+        let r = v.reflect(n);
+        assert_eq!(r, vector(1.0, 1.0, 0.0));
+
+        let v = vector(0.0, -1.0, 0.0);
+        let n = vector(2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0, 0.0);
+        let r = v.reflect(n);
+        assert_eq!(r, vector(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn light_creation() {
+        let intensity = color(1.0, 1.0, 1.0);
+        let position = point(0.0, 0.0, 0.0);
+        let light = point_light(position, intensity);
+        assert_eq!(light.position, position);
+        assert_eq!(light.intensity, intensity);
+    }
+
+    #[test]
+    fn material_creation() {
+        let m = material();
+        assert_eq!(m.color, color(1.0, 1.0, 1.0));
+        assert_eq!(m.ambient, 0.1);
+        assert_eq!(m.diffuse, 0.9);
+        assert_eq!(m.specular, 0.9);
+        assert_eq!(m.shininess, 200.0);
+    }
+
+    #[test]
+    fn sphere_material() {
+        let s = sphere();
+        assert_eq!(s.material, material());
+
+        let mut s = sphere();
+        let mut m = material();
+        m.ambient = 1.0;
+        s.material = m;
+        assert_eq!(s.material, m);
+    }
+
+    #[test]
+    fn lighting_with_the_eye() {
+        let m = material();
+        let position = point(0.0, 0.0, 0.0);
+        let eyev = vector(0.0, 0.0, -1.0);
+        let normalv = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 0.0, -10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(m, light, position, eyev, normalv, false);
+        assert_eq!(result, color(1.9, 1.9, 1.9));
+
+        let eyev = vector(0.0, 2f32.sqrt() / 2.0, -2f32.sqrt() / 2.0);
+        let result = lighting(m, light, position, eyev, normalv, false);
+        assert_eq!(result, color(1.0, 1.0, 1.0));
+
+        let eyev = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 10.0, -10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(m, light, position, eyev, normalv, false);
+        assert_eq!(result, color(0.7363961, 0.7363961, 0.7363961));
+
+        let eyev = vector(0.0, -2f32.sqrt() / 2.0, -2f32.sqrt() / 2.0);
+        let result = lighting(m, light, position, eyev, normalv, false);
+        assert_eq!(result, color(1.6363853, 1.6363853, 1.6363853));
+
+        let eyev = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 0.0, 10.0), color(1.0, 1.0, 1.0));
+        let result = lighting(m, light, position, eyev, normalv, false);
+        assert_eq!(result, color(0.1, 0.1, 0.1));
+    }
+
+    #[test]
+    fn world_intersect() {
+        let w = default_world();
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let xs = w.intersect(r);
+        if xs.len() == 4 {
+            assert_eq!(xs[0].t, 4.0);
+            assert_eq!(xs[1].t, 4.5);
+            assert_eq!(xs[2].t, 5.5);
+            assert_eq!(xs[3].t, 6.0);
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn precompute_intersection() {
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let shape = sphere();
+        let i = intersection(4.0, crate::Object::S(shape));
+        let comps = i.prepare_computations(r);
+        assert_eq!(comps.t, i.t);
+        assert_eq!(comps.object, i.object);
+        assert_eq!(comps.point, point(0.0, 0.0, -1.0));
+        assert_eq!(comps.eyev, vector(0.0, 0.0, -1.0));
+        assert_eq!(comps.normalv, vector(0.0, 0.0, -1.0));
+    }
+
+    #[test]
+    fn inside_outside_intersections() {
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let shape = sphere();
+        let i = intersection(4.0, crate::Object::S(shape));
+        let comps = i.prepare_computations(r);
+        assert_eq!(comps.inside, false);
+
+        let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 0.0, 1.0));
+        let shape = sphere();
+        let i = intersection(1.0, crate::Object::S(shape));
+        let comps = i.prepare_computations(r);
+        assert_eq!(comps.point, point(0.0, 0.0, 1.0));
+        assert_eq!(comps.eyev, vector(0.0, 0.0, -1.0));
+        assert_eq!(comps.inside, true);
+        assert_eq!(comps.normalv, vector(0.0, 0.0, -1.0));
+    }
+
+    #[test]
+    fn shading_intersection() {
+        let w = default_world();
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let shape = w.objects[0];
+        let i = intersection(4.0, shape);
+        let comps = i.prepare_computations(r);
+        let c = w.shade_hit(comps);
+        assert_eq!(c, color(0.38066125, 0.4758265, 0.28549594));
+
+        let mut w = default_world();
+        w.light = Some(point_light(point(0.0, 0.25, 0.0), color(1.0, 1.0, 1.0)));
+        let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 0.0, 1.0));
+        let shape = w.objects[1];
+        let i = intersection(0.5, shape);
+        let comps = i.prepare_computations(r);
+        let c = w.shade_hit(comps);
+        assert_eq!(c, color(0.9049845, 0.9049845, 0.9049845));
+    }
+
+    #[test]
+    fn color_at() {
+        let w = default_world();
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 1.0, 0.0));
+        let c = w.color_at(r);
+        assert_eq!(c, color(0.0, 0.0, 0.0));
+
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let c = w.color_at(r);
+        assert_eq!(c, color(0.38066125, 0.4758265, 0.28549594));
+
+        let mut w = default_world();
+        let crate::Object::S(mut outer) = w.objects[0];
+        let crate::Object::S(mut inner) = w.objects[1];
+        outer.material.ambient = 1.0;
+        inner.material.ambient = 1.0;
+        w.objects[0] = crate::Object::S(outer);
+        w.objects[1] = crate::Object::S(inner);
+        let r = ray(point(0.0, 0.0, 0.75), vector(0.0, 0.0, -1.0));
+        let c = w.color_at(r);
+        assert_eq!(c, inner.material.color);
+    }
+
+    #[test]
+    fn view_transforms() {
+        let from = point(0.0, 0.0, 0.0);
+        let to = point(0.0, 0.0, -1.0);
+        let up = vector(0.0, 1.0, 0.0);
+        let t = view_transform(from, to, up);
+        assert_eq!(t, identity_matrix());
+
+        let from = point(0.0, 0.0, 0.0);
+        let to = point(0.0, 0.0, 1.0);
+        let up = vector(0.0, 1.0, 0.0);
+        let t = view_transform(from, to, up);
+        assert_eq!(t, scaling(-1.0, 1.0, -1.0));
+
+        let from = point(0.0, 0.0, 8.0);
+        let to = point(0.0, 0.0, 0.0);
+        let up = vector(0.0, 1.0, 0.0);
+        let t = view_transform(from, to, up);
+        assert_eq!(t, translation(0.0, 0.0, -8.0));
+
+        let from = point(1.0, 3.0, 2.0);
+        let to = point(4.0, -2.0, 8.0);
+        let up = vector(1.0, 1.0, 0.0);
+        let t = view_transform(from, to, up);
+        assert_eq!(
+            t,
+            Matrix4x4::<f32> {
+                data: [
+                    -0.50709254,
+                    0.50709254,
+                    0.6761234,
+                    -2.366432,
+                    0.76771593,
+                    0.6060915,
+                    0.12121832,
+                    -2.828427,
+                    -0.35856858,
+                    0.59761435,
+                    -0.71713716,
+                    -2.3841858e-7,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn pixel_sizes() {
+        let c = camera(200, 125, PI / 2.0);
+        assert_eq!(c.pixel_size, 0.01);
+        let c = camera(125, 200, PI / 2.0);
+        assert_eq!(c.pixel_size, 0.01);
+    }
+
+    #[test]
+    fn constructing_rays_through_canvas() {
+        let c = camera(201, 101, PI / 2.0);
+        let r = c.ray_for_pixel(100, 50);
+        assert_eq!(r.origin, point(0.0, 0.0, 0.0));
+        assert_eq!(r.direction, vector(0.0, 0.0, -1.0));
+
+        let c = camera(201, 101, PI / 2.0);
+        let r = c.ray_for_pixel(0, 0);
+        assert_eq!(r.origin, point(0.0, 0.0, 0.0));
+        assert_eq!(r.direction, vector(0.6651864, 0.33259323, -0.66851234));
+
+        let mut c = camera(201, 101, PI / 2.0);
+        c.transform = rotation_y(PI / 4.0) * translation(0.0, -2.0, 5.0);
+        let r = c.ray_for_pixel(100, 50);
+        assert_eq!(r.origin, point(0.0, 2.0, -5.0));
+        assert_eq!(r.direction, vector(0.70710665, 0.0, -0.7071069));
+    }
+
+    #[test]
+    fn rendering() {
+        let w = default_world();
+        let mut c = camera(11, 11, PI / 2.0);
+        let from = point(0.0, 0.0, -5.0);
+        let to = point(0.0, 0.0, 0.0);
+        let up = vector(0.0, 1.0, 0.0);
+        c.transform = view_transform(from, to, up);
+        let image = render(c, w);
+        assert_eq!(
+            image.pixel_at(5, 5),
+            color(0.38066125, 0.4758265, 0.28549594)
+        );
+    }
+
+    #[test]
+    fn lighting_in_shadow() {
+        let m = material();
+        let position = point(0.0, 0.0, 0.0);
+        let eyev = vector(0.0, 0.0, -1.0);
+        let normalv = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 0.0, -10.0), color(1.0, 1.0, 1.0));
+        let in_shadow = true;
+        let result = lighting(m, light, position, eyev, normalv, in_shadow);
+        assert_eq!(result, color(0.1, 0.1, 0.1));
+    }
+
+    #[test]
+    fn check_shadows() {
+        let w = default_world();
+        let p = point(0.0, 10.0, 0.0);
+        assert_eq!(w.is_shadowed(p), false);
+        let p = point(10.0, -10.0, 10.0);
+        assert_eq!(w.is_shadowed(p), true);
+        let p = point(-20.0, 20.0, -20.0);
+        assert_eq!(w.is_shadowed(p), false);
+        let p = point(-2.0, 2.0, -2.0);
+        assert_eq!(w.is_shadowed(p), false);
+    }
+
+    #[test]
+    fn intersection_in_shadow() {
+        let mut w = world();
+        w.light = Some(point_light(point(0.0, 0.0, -10.0), color(1.0, 1.0, 1.0)));
+        let s1 = sphere();
+        w.objects.push(Object::S(s1));
+        let mut s2 = sphere();
+        s2.set_transform(translation(0.0, 0.0, 10.0));
+        w.objects.push(Object::S(s2));
+        let r = ray(point(0.0, 0.0, 5.0), vector(0.0, 0.0, 1.0));
+        let i = intersection(4.0, Object::S(s2));
+        let comps = i.prepare_computations(r);
+        let c= w.shade_hit(comps);
+        assert_eq!(c, color(0.1, 0.1, 0.1));
+    }
+
+    #[test]
+    fn hit_offseting() {
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let mut shape = sphere();
+        shape.set_transform(translation(0.0, 0.0, 1.0));
+        let i = intersection(5.0, Object::S(shape));
+        let comps = i.prepare_computations(r);
+        assert!(comps.over_point.z < -0.00001 / 2.0);
+        assert!(comps.point.z > comps.over_point.z);
     }
 }
