@@ -127,24 +127,30 @@ fn color(x: f32, y: f32, z: f32) -> Tuple {
     Tuple { x, y, z, w: 0.0f32 }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct Matrix<T: Copy> {
-    data: Vec<T>,
-    rows: usize,
-    cols: usize,
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Matrix4x4<T: Copy> {
+    data: [T; 16],
 }
 
-fn identity_matrix() -> Matrix<f32> {
-    Matrix {
-        data: vec![
+#[derive(Debug, Clone, PartialEq)]
+struct Matrix3x3<T: Copy> {
+    data: [T; 9],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Matrix2x2<T: Copy> {
+    data: [T; 4],
+}
+
+fn identity_matrix() -> Matrix4x4<f32> {
+    Matrix4x4 {
+        data: [
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ],
-        rows: 4,
-        cols: 4,
     }
 }
 
-fn translation(x: f32, y: f32, z: f32) -> Matrix<f32> {
+fn translation(x: f32, y: f32, z: f32) -> Matrix4x4<f32> {
     let mut id = identity_matrix();
     id.set(0, 3, x);
     id.set(1, 3, y);
@@ -152,7 +158,7 @@ fn translation(x: f32, y: f32, z: f32) -> Matrix<f32> {
     id
 }
 
-fn scaling(x: f32, y: f32, z: f32) -> Matrix<f32> {
+fn scaling(x: f32, y: f32, z: f32) -> Matrix4x4<f32> {
     let mut id = identity_matrix();
     id.set(0, 0, x);
     id.set(1, 1, y);
@@ -160,7 +166,7 @@ fn scaling(x: f32, y: f32, z: f32) -> Matrix<f32> {
     id
 }
 
-fn rotation_x(a: f32) -> Matrix<f32> {
+fn rotation_x(a: f32) -> Matrix4x4<f32> {
     let mut id = identity_matrix();
     id.set(1, 1, a.cos());
     id.set(1, 2, -a.sin());
@@ -169,7 +175,7 @@ fn rotation_x(a: f32) -> Matrix<f32> {
     id
 }
 
-fn rotation_y(a: f32) -> Matrix<f32> {
+fn rotation_y(a: f32) -> Matrix4x4<f32> {
     let mut id = identity_matrix();
     id.set(0, 0, a.cos());
     id.set(0, 2, a.sin());
@@ -178,7 +184,7 @@ fn rotation_y(a: f32) -> Matrix<f32> {
     id
 }
 
-fn rotation_z(a: f32) -> Matrix<f32> {
+fn rotation_z(a: f32) -> Matrix4x4<f32> {
     let mut id = identity_matrix();
     id.set(0, 0, a.cos());
     id.set(0, 1, -a.sin());
@@ -187,7 +193,7 @@ fn rotation_z(a: f32) -> Matrix<f32> {
     id
 }
 
-fn shearing(x_y: f32, x_z: f32, y_x: f32, y_z: f32, z_x: f32, z_y: f32) -> Matrix<f32> {
+fn shearing(x_y: f32, x_z: f32, y_x: f32, y_z: f32, z_x: f32, z_y: f32) -> Matrix4x4<f32> {
     let mut id = identity_matrix();
     id.set(0, 1, x_y);
     id.set(0, 2, x_z);
@@ -198,17 +204,59 @@ fn shearing(x_y: f32, x_z: f32, y_x: f32, y_z: f32, z_x: f32, z_y: f32) -> Matri
     id
 }
 
-impl<T: Copy> Matrix<T> {
+impl<T: Copy> Matrix2x2<T> {
     fn at(&self, r: usize, c: usize) -> T {
-        let idx = r * self.cols + c;
+        let idx = r * 2 + c;
         self.data[idx]
     }
     fn set(&mut self, r: usize, c: usize, val: T) {
-        let idx = r * self.cols + c;
+        let idx = r * 2 + c;
+        self.data[idx] = val;
+    }
+}
+
+impl<T: Copy> Matrix3x3<T> {
+    fn at(&self, r: usize, c: usize) -> T {
+        let idx = r * 3 + c;
+        self.data[idx]
+    }
+    fn set(&mut self, r: usize, c: usize, val: T) {
+        let idx = r * 3 + c;
+        self.data[idx] = val;
+    }
+    fn submatrix(&self, r: usize, c: usize) -> Matrix2x2<T> {
+        let mut m = Matrix2x2 {
+            data: [self.data[0]; 4],
+        };
+        let mut ro = 0;
+        let mut co;
+        for row in 0..3 {
+            if row != r {
+                co = 0;
+                for col in 0..3 {
+                    if col != c {
+                        m.set(ro, co, self.at(row, col));
+                        co += 1;
+                    }
+                }
+                ro += 1;
+            }
+        }
+        m
+    }
+}
+
+impl<T: Copy> Matrix4x4<T> {
+    fn at(&self, r: usize, c: usize) -> T {
+        let idx = r * 4 + c;
+        self.data[idx]
+    }
+    fn set(&mut self, r: usize, c: usize, val: T) {
+        let idx = r * 4 + c;
         self.data[idx] = val;
     }
     fn transpose(&mut self) {
-        let mut v = vec![self.data[0]; 16];
+        let mut v = [self.data[0]; 16];
         v[0] = self.data[0];
         v[1] = self.data[4];
         v[2] = self.data[8];
@@ -227,8 +275,8 @@ impl<T: Copy> Matrix<T> {
         v[15] = self.data[15];
         self.data = v;
     }
-    fn transposed(&self) -> Matrix<T> {
-        let mut v = vec![self.data[0]; 16];
+    fn transposed(&self) -> Matrix4x4<T> {
+        let mut v = [self.data[0]; 16];
         v[0] = self.data[0];
         v[1] = self.data[4];
         v[2] = self.data[8];
@@ -245,24 +293,18 @@ impl<T: Copy> Matrix<T> {
         v[13] = self.data[7];
         v[14] = self.data[11];
         v[15] = self.data[15];
-        Matrix {
-            data: v,
-            rows: self.rows,
-            cols: self.cols,
-        }
+        Matrix4x4 { data: v }
     }
-    fn submatrix(&self, r: usize, c: usize) -> Matrix<T> {
-        let mut m = Matrix {
-            data: vec![self.data[0]; (self.rows - 1) * (self.cols - 1)],
-            rows: self.rows - 1,
-            cols: self.cols - 1,
+    fn submatrix(&self, r: usize, c: usize) -> Matrix3x3<T> {
+        let mut m = Matrix3x3 {
+            data: [self.data[0]; 9],
         };
         let mut ro = 0;
         let mut co;
-        for row in 0..self.rows {
+        for row in 0..4 {
             if row != r {
                 co = 0;
-                for col in 0..self.cols {
+                for col in 0..4 {
                     if col != c {
                         m.set(ro, co, self.at(row, col));
                         co += 1;
@@ -275,15 +317,11 @@ impl<T: Copy> Matrix<T> {
     }
 }
 
-impl Matrix<f32> {
+impl Matrix3x3<f32> {
     fn determinant(&self) -> f32 {
-        match self.rows {
-            2 => self.data[0] * self.data[3] - self.data[1] * self.data[2],
-            3 | 4 => (0usize..self.cols)
-                .map(|c| self.at(0, c) * self.cofactor(0, c))
-                .sum(),
-            _ => panic!("Not supported"),
-        }
+        (0usize..3)
+            .map(|c| self.at(0, c) * self.cofactor(0, c))
+            .sum()
     }
     fn minor(&self, r: usize, c: usize) -> f32 {
         self.submatrix(r, c).determinant()
@@ -291,14 +329,34 @@ impl Matrix<f32> {
     fn cofactor(&self, r: usize, c: usize) -> f32 {
         self.minor(r, c) * if (r + c) % 2 == 1 { -1.0 } else { 1.0 }
     }
-    fn inverse(&self) -> Matrix<f32> {
+}
+
+impl Matrix2x2<f32> {
+    fn determinant(&self) -> f32 {
+        self.data[0] * self.data[3] - self.data[1] * self.data[2]
+    }
+}
+
+impl Matrix4x4<f32> {
+    fn determinant(&self) -> f32 {
+        (0usize..4)
+            .map(|c| self.at(0, c) * self.cofactor(0, c))
+            .sum()
+    }
+    fn minor(&self, r: usize, c: usize) -> f32 {
+        self.submatrix(r, c).determinant()
+    }
+    fn cofactor(&self, r: usize, c: usize) -> f32 {
+        self.minor(r, c) * if (r + c) % 2 == 1 { -1.0 } else { 1.0 }
+    }
+    fn inverse(&self) -> Matrix4x4<f32> {
         let d = self.determinant();
         if d == 0.0 {
             panic!("Not invertible");
         }
         let mut m = self.clone();
-        for row in 0..self.rows {
-            for col in 0..self.cols {
+        for row in 0..4 {
+            for col in 0..4 {
                 let c = self.cofactor(row, col);
                 m.set(col, row, c / d);
             }
@@ -307,14 +365,10 @@ impl Matrix<f32> {
     }
 }
 
-impl ops::Mul<Matrix<f32>> for Matrix<f32> {
-    type Output = Matrix<f32>;
-    fn mul(self, other: Matrix<f32>) -> Matrix<f32> {
-        let mut m = Matrix::<f32> {
-            data: vec![0f32; 16],
-            rows: 4,
-            cols: 4,
-        };
+impl ops::Mul<Matrix4x4<f32>> for Matrix4x4<f32> {
+    type Output = Matrix4x4<f32>;
+    fn mul(self, other: Matrix4x4<f32>) -> Matrix4x4<f32> {
+        let mut m = Matrix4x4::<f32> { data: [0f32; 16] };
         for row in 0usize..=3usize {
             for col in 0usize..=3usize {
                 m.set(
@@ -331,7 +385,7 @@ impl ops::Mul<Matrix<f32>> for Matrix<f32> {
     }
 }
 
-impl ops::Mul<Tuple> for Matrix<f32> {
+impl ops::Mul<Tuple> for Matrix4x4<f32> {
     type Output = Tuple;
     fn mul(self, other: Tuple) -> Tuple {
         let mut t = tuple(0.0, 0.0, 0.0, 0.0);
@@ -356,7 +410,7 @@ impl ops::Mul<Tuple> for Matrix<f32> {
 }
 
 struct Canvas {
-    m: Matrix<Tuple>,
+    m: Vec<Tuple>,
     w: usize,
     h: usize,
 }
@@ -373,15 +427,17 @@ fn clamp_color(c: f32) -> u8 {
 
 impl Canvas {
     fn pixel_at(self, x: usize, y: usize) -> Tuple {
-        self.m.at(y, x)
+        let idx = x * self.h + y;
+        self.m[idx]
     }
     fn write_pixel(&mut self, x: usize, y: usize, c: Tuple) {
-        self.m.set(y, x, c);
+        let idx = x * self.h + y;
+        self.m[idx] = c;
     }
-    fn to_ppm(self) -> String {
+    fn to_ppm(&self) -> String {
         let mut s = "P3\n".to_string();
         s += &format!("{} {}\n255\n", self.w, self.h);
-        for c in self.m.data.iter() {
+        for c in self.m.iter() {
             s += &format!(
                 "{} {} {}\n",
                 clamp_color(c.x * 256.0),
@@ -395,11 +451,7 @@ impl Canvas {
 
 fn canvas(w: usize, h: usize) -> Canvas {
     Canvas {
-        m: Matrix {
-            data: vec![color(0.0, 0.0, 0.0); w * h],
-            rows: h,
-            cols: w,
-        },
+        m: vec![color(0.0, 0.0, 0.0); w * h],
         w,
         h,
     }
@@ -408,28 +460,132 @@ fn canvas(w: usize, h: usize) -> Canvas {
 #[derive(Debug, Clone, Copy)]
 struct Ray {
     origin: Tuple,
-    direction: Tuple
+    direction: Tuple,
 }
 
 fn ray(origin: Tuple, direction: Tuple) -> Ray {
-    Ray{origin, direction}
+    Ray { origin, direction }
 }
 
 impl Ray {
     fn position(self, t: f32) -> Tuple {
         self.origin + self.direction * t
     }
+    fn transform(self, t: Matrix4x4<f32>) -> Ray {
+        let o = t * self.origin;
+        let d = t * self.direction;
+        Ray {
+            origin: o,
+            direction: d,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Sphere {
+    origin: Tuple,
+    radius: f32,
+    transform: Matrix4x4<f32>,
+}
+
+fn sphere() -> Sphere {
+    Sphere {
+        origin: point(0.0, 0.0, 0.0),
+        radius: 1.0,
+        transform: identity_matrix(),
+    }
+}
+
+impl Sphere {
+    fn intersect(self, ray: Ray) -> Vec<Intersection> {
+        let r = ray.transform(self.transform.inverse());
+        let sphere_to_ray = r.origin - self.origin;
+        let a = r.direction.dot(r.direction);
+        let b = 2.0 * r.direction.dot(sphere_to_ray);
+        let c = sphere_to_ray.dot(sphere_to_ray) - 1.0;
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant < 0.0 {
+            return intersections![];
+        }
+        let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
+        let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
+        intersections![
+            intersection(t1, InterObject::S(self)),
+            intersection(t2, InterObject::S(self))
+        ]
+    }
+    fn set_transform(&mut self, t: Matrix4x4<f32>) {
+        self.transform = t;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InterObject {
+    S(Sphere),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Intersection {
+    t: f32,
+    object: InterObject,
+}
+
+fn intersection(t: f32, o: InterObject) -> Intersection {
+    Intersection { t, object: o }
+}
+
+use std::vec as intersections;
+
+fn hit(xs: Vec<Intersection>) -> Option<Intersection> {
+    if xs.is_empty() {
+        None
+    } else {
+        let mut min = f32::MAX;
+        let mut min_idx = None;
+        for (i, x) in xs.iter().enumerate() {
+            if x.t > 0.0 && x.t < min {
+                min = x.t;
+                min_idx = Some(i);
+            }
+        }
+        min_idx.map(|idx| xs[idx])
+    }
 }
 
 fn main() {
-    println!("Hello, world!");
+    let ray_origin = point(0.0, 0.0, -5.0);
+    let wall_z = 10.0;
+    let wall_size = 7.0;
+    let canvas_pixels = 100;
+    let pixel_size = wall_size / canvas_pixels as f32;
+    let half = wall_size / 2.0;
+    let mut canvas = canvas(canvas_pixels, canvas_pixels);
+    let color = color(1.0, 0.0, 0.0);
+    let shape = sphere();
+    for y in 0..canvas_pixels {
+        let world_y = half - pixel_size * y as f32;
+        for x in 0..canvas_pixels {
+            let world_x = -half + pixel_size * x as f32;
+            let position = point(world_x, world_y, wall_z);
+            let r = ray(ray_origin, (position - ray_origin).normalize());
+            let xs = shape.intersect(r);
+            if hit(xs).is_some() {
+                canvas.write_pixel(x, y, color);
+            }
+        }
+    }
+    println!("{}", canvas.to_ppm());
 }
 
 #[cfg(test)]
 mod tests {
     use std::f32::consts::PI;
 
-    use crate::{canvas, color, identity_matrix, point, ray, rotation_x, rotation_y, rotation_z, scaling, shearing, translation, tuple, vector, Matrix};
+    use crate::{
+        canvas, color, hit, identity_matrix, intersection, intersections, point, ray, rotation_x,
+        rotation_y, rotation_z, scaling, shearing, sphere, translation, tuple, vector, Matrix2x2,
+        Matrix3x3, Matrix4x4,
+    };
 
     #[test]
     fn is_point() {
@@ -577,13 +733,11 @@ mod tests {
 
     #[test]
     fn constructing_matrix() {
-        let m = Matrix::<f32> {
-            data: vec![
+        let m = Matrix4x4::<f32> {
+            data: [
                 1.0, 2.0, 3.0, 4.0, 5.5, 6.5, 7.5, 8.5, 9.0, 10.0, 11.0, 12.0, 13.5, 14.5, 15.5,
                 16.5,
             ],
-            rows: 4,
-            cols: 4,
         };
         assert_eq!(1.0, m.at(0, 0));
         assert_eq!(4.0, m.at(0, 3));
@@ -596,15 +750,11 @@ mod tests {
 
     #[test]
     fn compare_matrices() {
-        let a = Matrix::<f32> {
-            data: vec![1.0, 2.0, 3.0, 4.0],
-            rows: 2,
-            cols: 2,
+        let a = Matrix2x2::<f32> {
+            data: [1.0, 2.0, 3.0, 4.0],
         };
-        let b = Matrix::<f32> {
-            data: vec![-1.0, 2.0, -3.0, 4.0],
-            rows: 2,
-            cols: 2,
+        let b = Matrix2x2::<f32> {
+            data: [-1.0, 2.0, -3.0, 4.0],
         };
         assert_eq!(a, a);
         assert_ne!(a, b);
@@ -612,39 +762,31 @@ mod tests {
 
     #[test]
     fn multiply_matrices() {
-        let a = Matrix::<f32> {
-            data: vec![
+        let a = Matrix4x4::<f32> {
+            data: [
                 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0,
             ],
-            rows: 4,
-            cols: 4,
         };
-        let b = Matrix::<f32> {
-            data: vec![
+        let b = Matrix4x4::<f32> {
+            data: [
                 -2.0, 1.0, 2.0, 3.0, 3.0, 2.0, 1.0, -1.0, 4.0, 3.0, 6.0, 5.0, 1.0, 2.0, 7.0, 8.0,
             ],
-            rows: 4,
-            cols: 4,
         };
-        let c = Matrix::<f32> {
-            data: vec![
+        let c = Matrix4x4::<f32> {
+            data: [
                 20.0, 22.0, 50.0, 48.0, 44.0, 54.0, 114.0, 108.0, 40.0, 58.0, 110.0, 102.0, 16.0,
                 26.0, 46.0, 42.0,
             ],
-            rows: 4,
-            cols: 4,
         };
         assert_eq!(c, a * b);
     }
 
     #[test]
     fn mul_matrix_by_tuple() {
-        let a = Matrix::<f32> {
-            data: vec![
+        let a = Matrix4x4::<f32> {
+            data: [
                 1.0, 2.0, 3.0, 4.0, 2.0, 4.0, 4.0, 2.0, 8.0, 6.0, 4.0, 1.0, 0.0, 0.0, 0.0, 1.0,
             ],
-            rows: 4,
-            cols: 4,
         };
         let b = tuple(1.0, 2.0, 3.0, 1.0);
         assert_eq!(tuple(18.0, 24.0, 33.0, 1.0), a * b);
@@ -652,12 +794,10 @@ mod tests {
 
     #[test]
     fn mul_by_identity_matrix() {
-        let a = Matrix::<f32> {
-            data: vec![
+        let a = Matrix4x4::<f32> {
+            data: [
                 0.0, 1.0, 2.0, 4.0, 1.0, 2.0, 4.0, 8.0, 2.0, 4.0, 8.0, 16.0, 4.0, 8.0, 16.0, 32.0,
             ],
-            rows: 4,
-            cols: 4,
         };
         assert_eq!(a.clone(), a * identity_matrix());
         let b = tuple(1.0, 2.0, 3.0, 4.0);
@@ -666,19 +806,15 @@ mod tests {
 
     #[test]
     fn matrix_transpose() {
-        let mut a = Matrix::<f32> {
-            data: vec![
+        let mut a = Matrix4x4::<f32> {
+            data: [
                 0.0, 9.0, 3.0, 0.0, 9.0, 8.0, 0.0, 8.0, 1.0, 8.0, 5.0, 3.0, 0.0, 0.0, 5.0, 8.0,
             ],
-            rows: 4,
-            cols: 4,
         };
-        let b = Matrix::<f32> {
-            data: vec![
+        let b = Matrix4x4::<f32> {
+            data: [
                 0.0, 9.0, 1.0, 0.0, 9.0, 8.0, 8.0, 0.0, 3.0, 0.0, 5.0, 5.0, 0.0, 8.0, 3.0, 8.0,
             ],
-            rows: 4,
-            cols: 4,
         };
         assert_eq!(a.clone().transposed(), b);
         a.transpose();
@@ -687,37 +823,27 @@ mod tests {
 
     #[test]
     fn determinant2x2() {
-        let a = Matrix::<f32> {
-            data: vec![1.0, 5.0, -3.0, 2.0],
-            rows: 2,
-            cols: 2,
+        let a = Matrix2x2::<f32> {
+            data: [1.0, 5.0, -3.0, 2.0],
         };
         assert_eq!(17.0, a.determinant());
     }
 
     #[test]
     fn submatrices() {
-        let a = Matrix::<f32> {
-            data: vec![1.0, 5.0, 0.0, -3.0, 2.0, 7.0, 0.0, 6.0, -3.0],
-            rows: 3,
-            cols: 3,
+        let a = Matrix3x3::<f32> {
+            data: [1.0, 5.0, 0.0, -3.0, 2.0, 7.0, 0.0, 6.0, -3.0],
         };
-        let b = Matrix::<f32> {
-            data: vec![-3.0, 2.0, 0.0, 6.0],
-            rows: 2,
-            cols: 2,
+        let b = Matrix2x2::<f32> {
+            data: [-3.0, 2.0, 0.0, 6.0],
         };
-        let c = Matrix::<f32> {
-            data: vec![
+        let c = Matrix4x4::<f32> {
+            data: [
                 -6.0, 1.0, 1.0, 6.0, -8.0, 5.0, 8.0, 6.0, -1.0, 0.0, 8.0, 2.0, -7.0, 1.0, -1.0, 1.0,
             ],
-            rows: 4,
-            cols: 4,
         };
-        let d = Matrix::<f32> {
-            data: vec![-6.0, 1.0, 6.0, -8.0, 8.0, 6.0, -7.0, -1.0, 1.0],
-            rows: 3,
-            cols: 3,
+        let d = Matrix3x3::<f32> {
+            data: [-6.0, 1.0, 6.0, -8.0, 8.0, 6.0, -7.0, -1.0, 1.0],
         };
         assert_eq!(a.submatrix(0, 2), b);
         assert_eq!(c.submatrix(2, 1), d);
@@ -725,20 +851,16 @@ mod tests {
 
     #[test]
     fn minor() {
-        let a = Matrix::<f32> {
-            data: vec![3.0, 5.0, 0.0, 2.0, -1.0, -7.0, 6.0, -1.0, 5.0],
-            rows: 3,
-            cols: 3,
+        let a = Matrix3x3::<f32> {
+            data: [3.0, 5.0, 0.0, 2.0, -1.0, -7.0, 6.0, -1.0, 5.0],
         };
         assert_eq!(25.0, a.minor(1, 0));
     }
 
     #[test]
     fn cofactor() {
-        let a = Matrix::<f32> {
-            data: vec![3.0, 5.0, 0.0, 2.0, -1.0, -7.0, 6.0, -1.0, 5.0],
-            rows: 3,
-            cols: 3,
+        let a = Matrix3x3::<f32> {
+            data: [3.0, 5.0, 0.0, 2.0, -1.0, -7.0, 6.0, -1.0, 5.0],
         };
         assert_eq!(-12.0, a.cofactor(0, 0));
         assert_eq!(-25.0, a.cofactor(1, 0));
@@ -746,35 +868,29 @@ mod tests {
 
     #[test]
     fn determinant3x3and4x4() {
-        let a = Matrix::<f32> {
-            data: vec![1.0, 2.0, 6.0, -5.0, 8.0, -4.0, 2.0, 6.0, 4.0],
-            rows: 3,
-            cols: 3,
+        let a = Matrix3x3::<f32> {
+            data: [1.0, 2.0, 6.0, -5.0, 8.0, -4.0, 2.0, 6.0, 4.0],
         };
         assert_eq!(-196.0, a.determinant());
-        let b = Matrix::<f32> {
-            data: vec![
+        let b = Matrix4x4::<f32> {
+            data: [
                 -2.0, -8.0, 3.0, 5.0, -3.0, 1.0, 7.0, 3.0, 1.0, 2.0, -9.0, 6.0, -6.0, 7.0, 7.0,
                 -9.0,
             ],
-            rows: 4,
-            cols: 4,
         };
         assert_eq!(-4071.0, b.determinant());
     }
 
     #[test]
     fn inverse() {
-        let a = Matrix::<f32> {
-            data: vec![
+        let a = Matrix4x4::<f32> {
+            data: [
                 -5.0, 2.0, 6.0, -8.0, 1.0, -5.0, 1.0, 8.0, 7.0, 7.0, -6.0, -7.0, 1.0, -3.0, 7.0,
                 4.0,
             ],
-            rows: 4,
-            cols: 4,
         };
-        let b = Matrix::<f32> {
-            data: vec![
+        let b = Matrix4x4::<f32> {
+            data: [
                 0.21804512,
                 0.45112783,
                 0.24060151,
@@ -792,37 +908,29 @@ mod tests {
                 -0.30075186,
                 0.30639097,
             ],
-            rows: 4,
-            cols: 4,
         };
         assert_eq!(b, a.inverse());
     }
 
     #[test]
     fn mul_by_inverse() {
-        let a = Matrix::<f32> {
-            data: vec![
+        let a = Matrix4x4::<f32> {
+            data: [
                 3.0, -9.0, 7.0, 3.0, 3.0, -8.0, 2.0, -9.0, -4.0, 4.0, 4.0, 1.0, -6.0, 5.0, -1.0,
                 1.0,
             ],
-            rows: 4,
-            cols: 4,
         };
-        let b = Matrix::<f32> {
-            data: vec![
+        let b = Matrix4x4::<f32> {
+            data: [
                 8.0, 2.0, 2.0, 2.0, 3.0, -1.0, 7.0, 0.0, 7.0, 0.0, 5.0, 4.0, 6.0, -2.0, 0.0, 5.0,
             ],
-            rows: 4,
-            cols: 4,
         };
         let c = a.clone() * b.clone();
-        let d = Matrix::<f32> {
-            data: vec![
+        let d = Matrix4x4::<f32> {
+            data: [
                 3.0, -8.999999, 7.0, 3.0, 3.0, -7.999999, 2.0, -9.0, -4.0, 4.0, 4.0000005,
                 0.99999976, -6.0, 5.0, -0.9999995, 0.9999999,
             ],
-            rows: 4,
-            cols: 4,
         };
         assert_eq!(d, c * b.inverse());
     }
@@ -859,21 +967,30 @@ mod tests {
     #[test]
     fn rotations() {
         let p = point(0.0, 1.0, 0.0);
-        let half_quarter = rotation_x(PI/4.0);
-        let full_quarter = rotation_x(PI/2.0);
-        assert_eq!(point(0.0, 2f32.sqrt()/2.0, 2f32.sqrt()/2.0), half_quarter.clone() * p);
+        let half_quarter = rotation_x(PI / 4.0);
+        let full_quarter = rotation_x(PI / 2.0);
+        assert_eq!(
+            point(0.0, 2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
+            half_quarter.clone() * p
+        );
         assert_eq!(point(0.0, -4.371139e-8, 1.0), full_quarter * p);
         let inv = half_quarter.inverse();
         assert_eq!(point(0.0, 0.7071068, -0.7071068), inv * p);
         let p = point(0.0, 0.0, 1.0);
-        let half_quarter = rotation_y(PI/4.0);
-        let full_quarter = rotation_y(PI/2.0);
-        assert_eq!(point(2f32.sqrt()/2.0, 0.0, 2f32.sqrt()/2.0), half_quarter.clone() * p);
+        let half_quarter = rotation_y(PI / 4.0);
+        let full_quarter = rotation_y(PI / 2.0);
+        assert_eq!(
+            point(2f32.sqrt() / 2.0, 0.0, 2f32.sqrt() / 2.0),
+            half_quarter.clone() * p
+        );
         assert_eq!(point(1.0, 0.0, -4.371139e-8), full_quarter * p);
         let p = point(0.0, 1.0, 0.0);
-        let half_quarter = rotation_z(PI/4.0);
-        let full_quarter = rotation_z(PI/2.0);
-        assert_eq!(point(-2f32.sqrt()/2.0, 2f32.sqrt()/2.0, 0.0), half_quarter.clone() * p);
+        let half_quarter = rotation_z(PI / 4.0);
+        let full_quarter = rotation_z(PI / 2.0);
+        assert_eq!(
+            point(-2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0, 0.0),
+            half_quarter.clone() * p
+        );
         assert_eq!(point(-1.0, -4.371139e-8, 0.0), full_quarter * p);
     }
 
@@ -929,5 +1046,174 @@ mod tests {
         assert_eq!(r.position(1.0), point(3.0, 3.0, 4.0));
         assert_eq!(r.position(-1.0), point(1.0, 3.0, 4.0));
         assert_eq!(r.position(2.5), point(4.5, 3.0, 4.0));
+    }
+
+    #[test]
+    fn ray_sphere_intersections() {
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let s = sphere();
+        let xs = s.intersect(r);
+        if xs.len() == 2 {
+            assert_eq!(xs[0].t, 4.0);
+            assert_eq!(xs[1].t, 6.0);
+        } else {
+            assert!(false);
+        }
+
+        let r = ray(point(0.0, 1.0, -5.0), vector(0.0, 0.0, 1.0));
+        let s = sphere();
+        let xs = s.intersect(r);
+        if xs.len() == 2 {
+            assert_eq!(xs[0].t, 5.0);
+            assert_eq!(xs[1].t, 5.0);
+        } else {
+            assert!(false);
+        }
+
+        let r = ray(point(0.0, 2.0, -5.0), vector(0.0, 0.0, 1.0));
+        let s = sphere();
+        let xs = s.intersect(r);
+        assert_eq!(xs.len(), 0);
+
+        let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 0.0, 1.0));
+        let s = sphere();
+        let xs = s.intersect(r);
+        if xs.len() == 2 {
+            assert_eq!(xs[0].t, -1.0);
+            assert_eq!(xs[1].t, 1.0);
+        } else {
+            assert!(false);
+        }
+
+        let r = ray(point(0.0, 0.0, 5.0), vector(0.0, 0.0, 1.0));
+        let s = sphere();
+        let xs = s.intersect(r);
+        if xs.len() == 2 {
+            assert_eq!(xs[0].t, -6.0);
+            assert_eq!(xs[1].t, -4.0);
+        } else {
+            assert!(false);
+        }
+
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let s = sphere();
+        let xs = s.intersect(r);
+        if xs.len() == 2 {
+            assert_eq!(xs[0].object, crate::InterObject::S(s));
+            assert_eq!(xs[1].object, crate::InterObject::S(s));
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn aggregate_intersections() {
+        let s = sphere();
+        let i = intersection(3.5, crate::InterObject::S(s));
+        assert_eq!(i.t, 3.5);
+        assert_eq!(i.object, crate::InterObject::S(s));
+
+        let s = sphere();
+        let i1 = intersection(1.0, crate::InterObject::S(s));
+        let i2 = intersection(2.0, crate::InterObject::S(s));
+        let xs = intersections![i1, i2];
+        assert_eq!(xs[0].t, 1.0);
+        assert_eq!(xs[1].t, 2.0);
+    }
+
+    #[test]
+    fn hits() {
+        let s = sphere();
+        let i1 = intersection(1.0, crate::InterObject::S(s));
+        let i2 = intersection(2.0, crate::InterObject::S(s));
+        let xs = intersections![i1, i2];
+        if let Some(i) = hit(xs) {
+            assert_eq!(i, i1);
+        } else {
+            assert!(false);
+        }
+
+        let s = sphere();
+        let i1 = intersection(-1.0, crate::InterObject::S(s));
+        let i2 = intersection(1.0, crate::InterObject::S(s));
+        let xs = intersections![i1, i2];
+        if let Some(i) = hit(xs) {
+            assert_eq!(i, i2);
+        } else {
+            assert!(false);
+        }
+
+        let s = sphere();
+        let i1 = intersection(-2.0, crate::InterObject::S(s));
+        let i2 = intersection(-1.0, crate::InterObject::S(s));
+        let xs = intersections![i1, i2];
+        if let Some(_) = hit(xs) {
+            assert!(false);
+        }
+
+        let s = sphere();
+        let i1 = intersection(5.0, crate::InterObject::S(s));
+        let i2 = intersection(7.0, crate::InterObject::S(s));
+        let i3 = intersection(-3.0, crate::InterObject::S(s));
+        let i4 = intersection(2.0, crate::InterObject::S(s));
+        let xs = intersections![i1, i2, i3, i4];
+        if let Some(i) = hit(xs) {
+            assert_eq!(i, i4);
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn translating_ray() {
+        let r = ray(point(1.0, 2.0, 3.0), vector(0.0, 1.0, 0.0));
+        let m = translation(3.0, 4.0, 5.0);
+        let r2 = r.transform(m);
+        assert_eq!(r2.origin, point(4.0, 6.0, 8.0));
+        assert_eq!(r2.direction, vector(0.0, 1.0, 0.0));
+    }
+
+    #[test]
+    fn scaling_ray() {
+        let r = ray(point(1.0, 2.0, 3.0), vector(0.0, 1.0, 0.0));
+        let m = scaling(2.0, 3.0, 4.0);
+        let r2 = r.transform(m);
+        assert_eq!(r2.origin, point(2.0, 6.0, 12.0));
+        assert_eq!(r2.direction, vector(0.0, 3.0, 0.0));
+    }
+
+    #[test]
+    fn sphere_set_transform() {
+        let mut s = sphere();
+        let t = translation(2.0, 3.0, 4.0);
+        s.set_transform(t);
+        assert_eq!(s.transform, t);
+    }
+
+    #[test]
+    fn intersect_scaled_sphere_with_ray() {
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let mut s = sphere();
+        s.set_transform(scaling(2.0, 2.0, 2.0));
+        let xs = s.intersect(r);
+        if xs.len() == 2 {
+            assert_eq!(xs[0].t, 3.0);
+            assert_eq!(xs[1].t, 7.0);
+        } else {
+            assert!(false);
+        }
+    }
+
+    #[test]
+    fn intersect_translated_sphere_with_ray() {
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let mut s = sphere();
+        s.set_transform(translation(5.0, 0.0, 0.0));
+        let xs = s.intersect(r);
+        if xs.len() == 0 {
+            assert!(true);
+        } else {
+            assert!(false);
+        }
     }
 }
