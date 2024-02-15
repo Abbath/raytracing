@@ -1,5 +1,3 @@
-use std::f32::EPSILON;
-use std::iter::Once;
 use std::ops;
 
 #[derive(Debug, Clone, Copy)]
@@ -9,6 +7,10 @@ struct Tuple {
     z: f32,
     w: f32,
 }
+
+use Tuple as Point;
+use Tuple as Vector;
+use Tuple as Color;
 
 impl Tuple {
     fn is_point(self) -> bool {
@@ -20,26 +22,26 @@ impl Tuple {
     fn magnitude(self) -> f32 {
         (self.x.powi(2) + self.y.powi(2) + self.z.powi(2) + self.w.powi(2)).sqrt()
     }
-    fn normalize(self) -> Tuple {
+    fn normalize(self) -> Vector {
         let m = self.magnitude();
-        Tuple {
+        Vector {
             x: self.x / m,
             y: self.y / m,
             z: self.z / m,
             w: self.w / m,
         }
     }
-    fn dot(self, other: Tuple) -> f32 {
+    fn dot(self, other: Vector) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w
     }
-    fn cross(self, other: Tuple) -> Tuple {
+    fn cross(self, other: Vector) -> Vector {
         vector(
             self.y * other.z - self.z * other.y,
             self.z * other.x - self.x * other.z,
             self.x * other.y - self.y * other.x,
         )
     }
-    fn reflect(self, normal: Tuple) -> Tuple {
+    fn reflect(self, normal: Vector) -> Vector {
         self - normal * 2.0 * self.dot(normal)
     }
 }
@@ -127,16 +129,16 @@ fn tuple(x: f32, y: f32, z: f32, w: f32) -> Tuple {
     Tuple { x, y, z, w }
 }
 
-fn point(x: f32, y: f32, z: f32) -> Tuple {
-    Tuple { x, y, z, w: 1.0f32 }
+fn point(x: f32, y: f32, z: f32) -> Point {
+    Point { x, y, z, w: 1.0f32 }
 }
 
-fn vector(x: f32, y: f32, z: f32) -> Tuple {
-    Tuple { x, y, z, w: 0.0f32 }
+fn vector(x: f32, y: f32, z: f32) -> Vector {
+    Vector { x, y, z, w: 0.0f32 }
 }
 
-fn color(x: f32, y: f32, z: f32) -> Tuple {
-    Tuple { x, y, z, w: 0.0f32 }
+fn color(x: f32, y: f32, z: f32) -> Color {
+    Color { x, y, z, w: 0.0f32 }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -434,11 +436,11 @@ fn clamp_color(c: f32) -> u8 {
 }
 
 impl Canvas {
-    fn pixel_at(self, x: usize, y: usize) -> Tuple {
+    fn pixel_at(self, x: usize, y: usize) -> Color {
         let idx = y * self.w + x;
         self.m[idx]
     }
-    fn write_pixel(&mut self, x: usize, y: usize, c: Tuple) {
+    fn write_pixel(&mut self, x: usize, y: usize, c: Color) {
         let idx = y * self.w + x;
         self.m[idx] = c;
     }
@@ -467,16 +469,16 @@ fn canvas(w: usize, h: usize) -> Canvas {
 
 #[derive(Debug, Clone, Copy)]
 struct Ray {
-    origin: Tuple,
-    direction: Tuple,
+    origin: Point,
+    direction: Vector,
 }
 
-fn ray(origin: Tuple, direction: Tuple) -> Ray {
+fn ray(origin: Point, direction: Vector) -> Ray {
     Ray { origin, direction }
 }
 
 impl Ray {
-    fn position(self, t: f32) -> Tuple {
+    fn position(self, t: f32) -> Point {
         self.origin + self.direction * t
     }
     fn transform(self, t: Matrix4x4<f32>) -> Ray {
@@ -489,27 +491,42 @@ impl Ray {
     }
 }
 
+trait Shape {
+    fn get_transform(&self) -> Matrix4x4<f32>;
+    fn local_intersect(&self, r: Ray) -> Vec<Intersection>;
+    fn local_normal_at(&self, p: Point) -> Vector;
+    fn intersect(&self, ray: Ray) -> Vec<Intersection> {
+        let r = ray.transform(self.get_transform().inverse());
+        self.local_intersect(r)
+    }
+    fn normal_at(&self, wp: Point) -> Vector {
+        let op = self.get_transform().inverse() * wp;
+        let on = self.local_normal_at(op);
+        let mut wn = self.get_transform().inverse().transposed() * on;
+        wn.w = 0.0;
+        wn.normalize()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Sphere {
-    origin: Tuple,
-    radius: f32,
     transform: Matrix4x4<f32>,
     material: Material,
 }
 
 fn sphere() -> Sphere {
     Sphere {
-        origin: point(0.0, 0.0, 0.0),
-        radius: 1.0,
         transform: identity_matrix(),
         material: material(),
     }
 }
 
-impl Sphere {
-    fn intersect(self, ray: Ray) -> Vec<Intersection> {
-        let r = ray.transform(self.transform.inverse());
-        let sphere_to_ray = r.origin - self.origin;
+impl Shape for Sphere {
+    fn get_transform(&self) -> Matrix4x4<f32> {
+        self.transform
+    }
+    fn local_intersect(&self, r: Ray) -> Vec<Intersection> {
+        let sphere_to_ray = r.origin - point(0.0, 0.0, 0.0);
         let a = r.direction.dot(r.direction);
         let b = 2.0 * r.direction.dot(sphere_to_ray);
         let c = sphere_to_ray.dot(sphere_to_ray) - 1.0;
@@ -520,25 +537,25 @@ impl Sphere {
         let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
         let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
         intersections![
-            intersection(t1, Object::S(self)),
-            intersection(t2, Object::S(self))
+            intersection(t1, Object::S(*self)),
+            intersection(t2, Object::S(*self))
         ]
     }
+    fn local_normal_at(&self, p: Point) -> Vector {
+        p - point(0.0, 0.0, 0.0)
+    }
+}
+
+impl Sphere {
     fn set_transform(&mut self, t: Matrix4x4<f32>) {
         self.transform = t;
-    }
-    fn normal_at(self, wp: Tuple) -> Tuple {
-        let op = self.transform.inverse() * wp;
-        let on = op - self.origin;
-        let mut wn = self.transform.inverse().transposed() * on;
-        wn.w = 0.0;
-        wn.normalize()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Object {
     S(Sphere),
+    P(Plane)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -571,11 +588,11 @@ fn hit(xs: Vec<Intersection>) -> Option<Intersection> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Light {
-    position: Tuple,
-    intensity: Tuple,
+    position: Point,
+    intensity: Color,
 }
 
-fn point_light(position: Tuple, intensity: Tuple) -> Light {
+fn point_light(position: Point, intensity: Color) -> Light {
     Light {
         position,
         intensity,
@@ -601,17 +618,17 @@ fn material() -> Material {
     }
 }
 
-fn black() -> Tuple {
+fn black() -> Color {
     color(0.0, 0.0, 0.0)
 }
 
-fn lighting(mat: Material, light: Light, p: Tuple, eyev: Tuple, normalv: Tuple, in_shadow: bool) -> Tuple {
+fn lighting(mat: Material, light: Light, p: Point, eyev: Vector, normalv: Vector, in_shadow: bool) -> Color {
     let eff_color = mat.color * light.intensity;
     let lightv = (light.position - p).normalize();
     let ambient = eff_color * mat.ambient;
     let light_dot_normal = lightv.dot(normalv);
-    let diffuse: Tuple;
-    let specular: Tuple;
+    let diffuse: Color;
+    let specular: Color;
     if light_dot_normal < 0.0 {
         diffuse = black();
         specular = black();
@@ -669,15 +686,17 @@ impl World {
             .iter()
             .flat_map(|o| match o {
                 Object::S(s) => s.intersect(r),
+                Object::P(p) => p.intersect(r)
             })
             .collect();
         v.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
         v
     }
-    fn shade_hit(&self, comps: Computations) -> Tuple {
+    fn shade_hit(&self, comps: Computations) -> Color {
         lighting(
             match comps.object {
                 Object::S(s) => s.material,
+                Object::P(p) => p.material
             },
             self.light.unwrap(),
             comps.over_point,
@@ -686,7 +705,7 @@ impl World {
             self.is_shadowed(comps.over_point)
         )
     }
-    fn color_at(&self, r: Ray) -> Tuple {
+    fn color_at(&self, r: Ray) -> Color {
         let xs = self.intersect(r);
         if let Some(x) = hit(xs) {
             let comps = x.prepare_computations(r);
@@ -695,7 +714,7 @@ impl World {
             black()
         }
     }
-    fn is_shadowed(&self, p: Tuple) -> bool {
+    fn is_shadowed(&self, p: Point) -> bool {
         let v = self.light.unwrap().position - p;
         let distance = v.magnitude();
         let direction = v.normalize();
@@ -714,11 +733,11 @@ impl World {
 struct Computations {
     t: f32,
     object: Object,
-    point: Tuple,
-    eyev: Tuple,
-    normalv: Tuple,
+    point: Point,
+    eyev: Vector,
+    normalv: Vector,
     inside: bool,
-    over_point: Tuple
+    over_point: Point
 }
 
 impl Intersection {
@@ -731,6 +750,7 @@ impl Intersection {
             eyev: -r.direction,
             normalv: match self.object {
                 Object::S(s) => s.normal_at(p),
+                Object::P(pl) => pl.normal_at(p)
             },
             inside: false,
             over_point: point(0.0, 0.0, 0.0)
@@ -744,7 +764,7 @@ impl Intersection {
     }
 }
 
-fn view_transform(from: Tuple, to: Tuple, up: Tuple) -> Matrix4x4<f32> {
+fn view_transform(from: Point, to: Point, up: Vector) -> Matrix4x4<f32> {
     let forward = (to - from).normalize();
     let upn = up.normalize();
     let left = forward.cross(upn);
@@ -817,6 +837,43 @@ fn render(c: Camera, w: World) -> Canvas {
     image
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Plane {
+    transform: Matrix4x4<f32>,
+    material: Material,
+}
+
+fn plane() -> Plane {
+    Plane {
+        transform: identity_matrix(),
+        material: material()
+    }
+}
+
+impl Shape for Plane {
+    fn get_transform(&self) -> Matrix4x4<f32> {
+        self.transform
+    }
+    fn local_normal_at(&self, p: Point) -> Vector {
+        vector(0.0, 1.0, 0.0)
+    }
+    fn local_intersect(&self, r: Ray) -> Vec<Intersection> {
+        if r.direction.y.abs() < 0.00001 {
+            vec![]
+        } else {
+            let t = -r.origin.y / r.direction.y;
+            vec![intersection(t, Object::P(*self))]
+        }
+    }
+}
+
+impl Plane {
+    // fn intersect(&self, r: Ray) -> Vec<Intersection> {
+    //     let local_ray = r.transform(self.transform.inverse());
+
+    // }
+}
+
 fn main1() {
     let ray_origin = point(0.0, 0.0, -5.0);
     let wall_z = 10.0;
@@ -840,10 +897,12 @@ fn main1() {
             let xs = shape.intersect(r);
             if let Some(t) = hit(xs) {
                 let p = r.position(t.t);
-                let Object::S(s) = t.object;
-                let norm = s.normal_at(p);
+                let (norm, mat) = match t.object {
+                    Object::S(s) => (s.normal_at(p), s.material),
+                    Object::P(pl) => (pl.normal_at(p), pl.material)
+                };
                 let eye = -r.direction;
-                let colr = lighting(s.material, light, p, eye, norm, false);
+                let colr = lighting(mat, light, p, eye, norm, false);
                 canvas.write_pixel(x, y, colr);
             }
         }
@@ -853,24 +912,23 @@ fn main1() {
 
 fn main() {
     use std::f32::consts::PI;
-    let mut floor = sphere();
-    floor.transform = scaling(10.0, 0.01, 10.0);
+    use Object::{S, P};
+
+    let mut floor = plane();
     floor.material = material();
     floor.material.color = color(1.0, 0.9, 0.9);
     floor.material.specular = 0.0;
 
-    let mut left_wall = sphere();
+    let mut left_wall = plane();
     left_wall.transform = translation(0.0, 0.0, 5.0)
         * rotation_y(-PI / 4.0)
-        * rotation_x(PI / 2.0)
-        * scaling(10.0, 0.01, 10.0);
+        * rotation_x(PI / 2.0);
     left_wall.material = floor.material;
 
-    let mut right_wall = sphere();
+    let mut right_wall = plane();
     right_wall.transform = translation(0.0, 0.0, 5.0)
         * rotation_y(PI / 4.0)
-        * rotation_x(PI / 2.0)
-        * scaling(10.0, 0.01, 10.0);
+        * rotation_x(PI / 2.0);
     right_wall.material = floor.material;
 
     let mut middle = sphere();
@@ -896,10 +954,7 @@ fn main() {
 
     let mut w = world();
     w.light = Some(point_light(point(-10.0, 10.0, -10.0), color(1.0, 1.0, 1.0)));
-    w.objects = vec![floor, left_wall, right_wall, middle, right, left]
-        .iter()
-        .map(|&s| Object::S(s))
-        .collect();
+    w.objects = vec![P(floor), P(left_wall), P(right_wall), S(middle), S(right), S(left)];
     let mut cam = camera(1000, 500, PI / 3.0);
     cam.transform = view_transform(
         point(0.0, 1.5, -5.0),
@@ -915,7 +970,7 @@ mod tests {
     use std::f32::consts::PI;
 
     use crate::{
-        camera, canvas, color, default_world, hit, identity_matrix, intersection, intersections, lighting, material, point, point_light, ray, render, rotation_x, rotation_y, rotation_z, scaling, shearing, sphere, translation, tuple, vector, view_transform, world, Matrix2x2, Matrix3x3, Matrix4x4, Object
+        camera, canvas, color, default_world, hit, identity_matrix, intersection, intersections, lighting, material, plane, point, point_light, ray, render, rotation_x, rotation_y, rotation_z, scaling, shearing, sphere, translation, tuple, vector, view_transform, world, Matrix2x2, Matrix3x3, Matrix4x4, Object, Shape
     };
 
     #[test]
@@ -1744,15 +1799,17 @@ mod tests {
         assert_eq!(c, color(0.38066125, 0.4758265, 0.28549594));
 
         let mut w = default_world();
-        let crate::Object::S(mut outer) = w.objects[0];
-        let crate::Object::S(mut inner) = w.objects[1];
-        outer.material.ambient = 1.0;
-        inner.material.ambient = 1.0;
-        w.objects[0] = crate::Object::S(outer);
-        w.objects[1] = crate::Object::S(inner);
-        let r = ray(point(0.0, 0.0, 0.75), vector(0.0, 0.0, -1.0));
-        let c = w.color_at(r);
-        assert_eq!(c, inner.material.color);
+        if let crate::Object::S(mut outer) = w.objects[0] {
+            outer.material.ambient = 1.0;
+            w.objects[0] = crate::Object::S(outer);
+        }
+        if let crate::Object::S(mut inner) = w.objects[1] {
+            inner.material.ambient = 1.0;
+            w.objects[1] = crate::Object::S(inner);
+            let r = ray(point(0.0, 0.0, 0.75), vector(0.0, 0.0, -1.0));
+            let c = w.color_at(r);
+            assert_eq!(c, inner.material.color);
+        }
     }
 
     #[test]
@@ -1896,5 +1953,46 @@ mod tests {
         let comps = i.prepare_computations(r);
         assert!(comps.over_point.z < -0.00001 / 2.0);
         assert!(comps.point.z > comps.over_point.z);
+    }
+
+    #[test]
+    fn plane_normals() {
+        let p = plane();
+        let n1 = p.local_normal_at(point(0.0, 0.0, 0.0));
+        let n2 = p.local_normal_at(point(10.0, 0.0, -10.0));
+        let n3 = p.local_normal_at(point(-5.0, 0.0, 150.0));
+        assert_eq!(n1, vector(0.0, 1.0, 0.0));
+        assert_eq!(n2, vector(0.0, 1.0, 0.0));
+        assert_eq!(n3, vector(0.0, 1.0, 0.0));
+    }
+
+    #[test]
+    fn plane_ray_intersect() {
+        let p = plane();
+        let r = ray(point(0.0, 10.0, 0.0), vector(0.0, 0.0, 1.0));
+        let xs = p.local_intersect(r);
+        assert!(xs.is_empty());
+
+        let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 0.0, 1.0));
+        let xs = p.local_intersect(r);
+        assert!(xs.is_empty());
+
+        let r = ray(point(0.0, 1.0, 0.0), vector(0.0, -1.0, 0.0));
+        let xs = p.local_intersect(r);
+        if xs.len() == 1 {
+            assert_eq!(xs[0].t, 1.0);
+            assert_eq!(xs[0].object, Object::P(p));
+        } else {
+            assert!(false);
+        }
+
+        let r = ray(point(0.0, -1.0, 0.0), vector(0.0, 1.0, 0.0));
+        let xs = p.local_intersect(r);
+        if xs.len() == 1 {
+            assert_eq!(xs[0].t, 1.0);
+            assert_eq!(xs[0].object, Object::P(p));
+        } else {
+            assert!(false);
+        }
     }
 }
