@@ -1,6 +1,6 @@
 use std::ops;
 
-static  EPSILON: f32 = 0.00001;
+static EPSILON: f32 = 0.00001;
 
 #[derive(Debug, Clone, Copy)]
 struct Tuple {
@@ -518,6 +518,7 @@ impl Ray {
 enum ShapeType {
     Sphere,
     Plane,
+    Cube,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -540,6 +541,26 @@ fn glass_sphere() -> Shape {
     s.material.transparency = 1.0;
     s.material.refractive_index = 1.5;
     s
+}
+
+fn check_axis(origin: f32, direction: f32) -> (f32, f32) {
+    let tmin_numerator = -1.0 - origin;
+    let tmax_numerator = 1.0 - origin;
+
+    let (mut tmin, mut tmax) = if direction.abs() >= EPSILON {
+        (tmin_numerator / direction, tmax_numerator / direction)
+    } else {
+        (
+            tmin_numerator * f32::INFINITY,
+            tmax_numerator * f32::INFINITY,
+        )
+    };
+
+    if tmin > tmax {
+        (tmin, tmax) = (tmax, tmin);
+    }
+
+    (tmin, tmax)
 }
 
 impl Shape {
@@ -578,12 +599,23 @@ impl Shape {
                     vec![intersection(t, *self)]
                 }
             }
+            ShapeType::Cube => {
+                let (xtmin, xtmax) = check_axis(r.origin.x, r.direction.x);
+                let (ytmin, ytmax) = check_axis(r.origin.y, r.direction.y);
+                let (ztmin, ztmax) = check_axis(r.origin.z, r.direction.z);
+
+                let tmin = xtmin.max(ytmin.max(ztmin));
+                let tmax = xtmax.min(ytmax.min(ztmax));
+
+                intersections![intersection(tmin, *self), intersection(tmax, *self)]
+            }
         }
     }
     fn local_normal_at(&self, p: Point) -> Vector {
         match self.typ {
             ShapeType::Sphere => p - point(0.0, 0.0, 0.0),
             ShapeType::Plane => vector(0.0, 1.0, 0.0),
+            ShapeType::Cube => todo!(),
         }
     }
     fn intersect(&self, ray: Ray) -> Vec<Intersection> {
@@ -846,7 +878,7 @@ impl Computations {
             let cos_t = (1.0 - sin2_t).sqrt();
             cos = cos_t;
         }
-        let r0 = ((self.n1-self.n2)/(self.n1 + self.n2)).powi(2);
+        let r0 = ((self.n1 - self.n2) / (self.n1 + self.n2)).powi(2);
         r0 + (1.0 - r0) * (1.0 - cos).powi(5)
     }
 }
@@ -1075,6 +1107,14 @@ impl Pattern {
     }
 }
 
+fn cube() -> Shape {
+    Shape {
+        typ: ShapeType::Cube,
+        transform: identity_matrix(),
+        material: material(),
+    }
+}
+
 fn main() {
     use std::f32::consts::PI;
 
@@ -1130,11 +1170,11 @@ mod tests {
     use std::f32::consts::PI;
 
     use crate::{
-        black, camera, canvas, checkers_pattern, color, default_world, glass_sphere,
+        black, camera, canvas, checkers_pattern, color, cube, default_world, glass_sphere,
         gradient_pattern, hit, identity_matrix, intersection, intersections, lighting, material,
         plane, point, point_light, ray, render, ring_pattern, rotation_x, rotation_y, rotation_z,
         scaling, shearing, sphere, stripe_pattern, translation, tuple, vector, view_transform,
-        white, world, Intersection, Matrix2x2, Matrix3x3, Matrix4x4, Pattern, Tuple, EPSILON
+        white, world, Intersection, Matrix2x2, Matrix3x3, Matrix4x4, Pattern, Tuple, EPSILON,
     };
 
     #[test]
@@ -2510,7 +2550,10 @@ mod tests {
     #[test]
     fn fresnel_in_shade_hit() {
         let mut w = default_world();
-        let r = ray(point(0.0, 0.0, -3.0), vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0));
+        let r = ray(
+            point(0.0, 0.0, -3.0),
+            vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
+        );
         let mut floor = plane();
         floor.transform = translation(0.0, -1.0, 0.0);
         floor.material.reflective = 0.5;
@@ -2526,5 +2569,29 @@ mod tests {
         let comps = xs[0].prepare_computations(r, &xs);
         let c = w.shade_hit(comps, 5);
         assert_eq!(c, color(0.93391, 0.69643, 0.69243));
+    }
+
+    #[test]
+    fn a_cube() {
+        let examples = vec![
+            (point(5.0, 0.5, 0.0), vector(-1.0, 0.0, 0.0), 4.0, 6.0),
+            (point(-5.0, 0.5, 0.0), vector(1.0, 0.0, 0.0), 4.0, 6.0),
+            (point(0.5, 5.0, 0.0), vector(0.0, -1.0, 0.0), 4.0, 6.0),
+            (point(0.5, -5.0, 0.0), vector(0.0, 1.0, 0.0), 4.0, 6.0),
+            (point(0.5, 0.0, 5.0), vector(0.0, 0.0, -1.0), 4.0, 6.0),
+            (point(0.5, 0.0, -5.0), vector(0.0, 0.0, 1.0), 4.0, 6.0),
+            (point(0.0, 0.5, 0.0), vector(0.0, 0.0, 1.0), -1.0, 1.0),
+        ];
+        let c = cube();
+        for &(or, dir, t1, t2) in examples.iter() {
+            let r = ray(or, dir);
+            let xs = c.local_intersect(r);
+            if xs.len() == 2 {
+                assert_eq!(xs[0].t, t1);
+                assert_eq!(xs[1].t, t2);
+            } else {
+                assert!(false);
+            }
+        }
     }
 }
