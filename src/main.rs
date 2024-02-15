@@ -1,5 +1,7 @@
 use std::ops;
 
+static  EPSILON: f32 = 0.00001;
+
 #[derive(Debug, Clone, Copy)]
 struct Tuple {
     x: f32,
@@ -48,7 +50,7 @@ impl Tuple {
 
 impl PartialEq<Tuple> for Tuple {
     fn eq(&self, other: &Tuple) -> bool {
-        let f = |a: f32, b: f32| (a - b).abs() < 0.00001;
+        let f = |a: f32, b: f32| (a - b).abs() < EPSILON;
         f(self.x, other.x) && f(self.y, other.y) && f(self.z, other.z) && self.w == other.w
     }
 }
@@ -491,10 +493,99 @@ impl Ray {
     }
 }
 
-trait Shape {
-    fn get_transform(&self) -> Matrix4x4<f32>;
-    fn local_intersect(&self, r: Ray) -> Vec<Intersection>;
-    fn local_normal_at(&self, p: Point) -> Vector;
+// trait Shape {
+//     fn to_obj(&self) -> Object;
+//     fn get_transform(&self) -> Matrix4x4<f32>;
+//     fn set_transform(&mut self, t: Matrix4x4<f32>);
+//     fn get_material(&self) -> Material;
+//     fn set_material(&mut self, m: Material);
+//     fn local_intersect(&self, r: Ray) -> Vec<Intersection>;
+//     fn local_normal_at(&self, p: Point) -> Vector;
+//     fn intersect(&self, ray: Ray) -> Vec<Intersection> {
+//         let r = ray.transform(self.get_transform().inverse());
+//         self.local_intersect(r)
+//     }
+//     fn normal_at(&self, wp: Point) -> Vector {
+//         let op = self.get_transform().inverse() * wp;
+//         let on = self.local_normal_at(op);
+//         let mut wn = self.get_transform().inverse().transposed() * on;
+//         wn.w = 0.0;
+//         wn.normalize()
+//     }
+// }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ShapeType {
+    Sphere,
+    Plane,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Shape {
+    typ: ShapeType,
+    transform: Matrix4x4<f32>,
+    material: Material,
+}
+
+fn sphere() -> Shape {
+    Shape {
+        typ: ShapeType::Sphere,
+        transform: identity_matrix(),
+        material: material(),
+    }
+}
+
+fn glass_sphere() -> Shape {
+    let mut s = sphere();
+    s.material.transparency = 1.0;
+    s.material.refractive_index = 1.5;
+    s
+}
+
+impl Shape {
+    fn get_material(&self) -> Material {
+        self.material
+    }
+    fn set_material(&mut self, m: Material) {
+        self.material = m;
+    }
+    fn get_transform(&self) -> Matrix4x4<f32> {
+        self.transform
+    }
+    fn set_transform(&mut self, t: Matrix4x4<f32>) {
+        self.transform = t;
+    }
+    fn local_intersect(&self, r: Ray) -> Vec<Intersection> {
+        match self.typ {
+            ShapeType::Sphere => {
+                let sphere_to_ray = r.origin - point(0.0, 0.0, 0.0);
+                let a = r.direction.dot(r.direction);
+                let b = 2.0 * r.direction.dot(sphere_to_ray);
+                let c = sphere_to_ray.dot(sphere_to_ray) - 1.0;
+                let discriminant = b * b - 4.0 * a * c;
+                if discriminant < 0.0 {
+                    return intersections![];
+                }
+                let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
+                let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
+                intersections![intersection(t1, *self), intersection(t2, *self)]
+            }
+            ShapeType::Plane => {
+                if r.direction.y.abs() < EPSILON {
+                    vec![]
+                } else {
+                    let t = -r.origin.y / r.direction.y;
+                    vec![intersection(t, *self)]
+                }
+            }
+        }
+    }
+    fn local_normal_at(&self, p: Point) -> Vector {
+        match self.typ {
+            ShapeType::Sphere => p - point(0.0, 0.0, 0.0),
+            ShapeType::Plane => vector(0.0, 1.0, 0.0),
+        }
+    }
     fn intersect(&self, ray: Ray) -> Vec<Intersection> {
         let r = ray.transform(self.get_transform().inverse());
         self.local_intersect(r)
@@ -509,62 +600,12 @@ trait Shape {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Sphere {
-    transform: Matrix4x4<f32>,
-    material: Material,
-}
-
-fn sphere() -> Sphere {
-    Sphere {
-        transform: identity_matrix(),
-        material: material(),
-    }
-}
-
-impl Shape for Sphere {
-    fn get_transform(&self) -> Matrix4x4<f32> {
-        self.transform
-    }
-    fn local_intersect(&self, r: Ray) -> Vec<Intersection> {
-        let sphere_to_ray = r.origin - point(0.0, 0.0, 0.0);
-        let a = r.direction.dot(r.direction);
-        let b = 2.0 * r.direction.dot(sphere_to_ray);
-        let c = sphere_to_ray.dot(sphere_to_ray) - 1.0;
-        let discriminant = b * b - 4.0 * a * c;
-        if discriminant < 0.0 {
-            return intersections![];
-        }
-        let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
-        let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
-        intersections![
-            intersection(t1, Object::S(*self)),
-            intersection(t2, Object::S(*self))
-        ]
-    }
-    fn local_normal_at(&self, p: Point) -> Vector {
-        p - point(0.0, 0.0, 0.0)
-    }
-}
-
-impl Sphere {
-    fn set_transform(&mut self, t: Matrix4x4<f32>) {
-        self.transform = t;
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Object {
-    S(Sphere),
-    P(Plane)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
 struct Intersection {
     t: f32,
-    object: Object,
+    object: Shape,
 }
 
-fn intersection(t: f32, o: Object) -> Intersection {
+fn intersection(t: f32, o: Shape) -> Intersection {
     Intersection { t, object: o }
 }
 
@@ -606,6 +647,10 @@ struct Material {
     diffuse: f32,
     specular: f32,
     shininess: f32,
+    pattern: Option<Pattern>,
+    reflective: f32,
+    transparency: f32,
+    refractive_index: f32,
 }
 
 fn material() -> Material {
@@ -615,6 +660,10 @@ fn material() -> Material {
         diffuse: 0.9,
         specular: 0.9,
         shininess: 200.0,
+        pattern: None,
+        reflective: 0.0,
+        transparency: 0.0,
+        refractive_index: 1.0,
     }
 }
 
@@ -622,8 +671,24 @@ fn black() -> Color {
     color(0.0, 0.0, 0.0)
 }
 
-fn lighting(mat: Material, light: Light, p: Point, eyev: Vector, normalv: Vector, in_shadow: bool) -> Color {
-    let eff_color = mat.color * light.intensity;
+fn white() -> Color {
+    color(1.0, 1.0, 1.0)
+}
+
+fn lighting(
+    mat: Material,
+    light: Light,
+    p: Point,
+    eyev: Vector,
+    normalv: Vector,
+    in_shadow: bool,
+) -> Color {
+    let col = if let Some(pat) = mat.pattern {
+        pat.pattern_at(p)
+    } else {
+        mat.color
+    };
+    let eff_color = col * light.intensity;
     let lightv = (light.position - p).normalize();
     let ambient = eff_color * mat.ambient;
     let light_dot_normal = lightv.dot(normalv);
@@ -652,7 +717,7 @@ fn lighting(mat: Material, light: Light, p: Point, eyev: Vector, normalv: Vector
 #[derive(Debug, Clone, PartialEq)]
 struct World {
     light: Option<Light>,
-    objects: Vec<Object>,
+    objects: Vec<Shape>,
 }
 
 fn world() -> World {
@@ -664,52 +729,48 @@ fn world() -> World {
 
 fn default_world() -> World {
     let mut w = world();
-    w.light = Some(point_light(
-        point(-10.0, 10.0, -10.0),
-        color(1.0, 1.0, 1.0),
-    ));
+    w.light = Some(point_light(point(-10.0, 10.0, -10.0), color(1.0, 1.0, 1.0)));
     let mut s1 = sphere();
     s1.material.color = color(0.8, 1.0, 0.6);
     s1.material.diffuse = 0.7;
     s1.material.specular = 0.2;
-    w.objects.push(Object::S(s1));
+    w.objects.push(s1);
     let mut s2 = sphere();
     s2.set_transform(scaling(0.5, 0.5, 0.5));
-    w.objects.push(Object::S(s2));
+    w.objects.push(s2);
     w
 }
 
 impl World {
     fn intersect(&self, r: Ray) -> Vec<Intersection> {
-        let mut v: Vec<Intersection> = self
-            .objects
-            .iter()
-            .flat_map(|o| match o {
-                Object::S(s) => s.intersect(r),
-                Object::P(p) => p.intersect(r)
-            })
-            .collect();
+        let mut v: Vec<Intersection> = self.objects.iter().flat_map(|o| o.intersect(r)).collect();
         v.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
         v
     }
-    fn shade_hit(&self, comps: Computations) -> Color {
-        lighting(
-            match comps.object {
-                Object::S(s) => s.material,
-                Object::P(p) => p.material
-            },
+    fn shade_hit(&self, comps: Computations, remaining: u32) -> Color {
+        let surface = lighting(
+            comps.object.material,
             self.light.unwrap(),
             comps.over_point,
             comps.eyev,
             comps.normalv,
-            self.is_shadowed(comps.over_point)
-        )
+            self.is_shadowed(comps.over_point),
+        );
+        let reflected = self.reflected_color(comps, remaining);
+        let refracted = self.refracted_color(comps, remaining);
+        let mat = comps.object.material;
+        if mat.reflective > 0.0 && mat.transparency > 0.0 {
+            let reflectance = comps.schlick();
+            surface + reflected * reflectance + refracted * (1.0 - reflectance)
+        } else {
+            surface + reflected + refracted
+        }
     }
-    fn color_at(&self, r: Ray) -> Color {
+    fn color_at(&self, r: Ray, remaining: u32) -> Color {
         let xs = self.intersect(r);
-        if let Some(x) = hit(xs) {
-            let comps = x.prepare_computations(r);
-            self.shade_hit(comps)
+        if let Some(x) = hit(xs.clone()) {
+            let comps = x.prepare_computations(r, &xs);
+            self.shade_hit(comps, remaining)
         } else {
             black()
         }
@@ -727,39 +788,116 @@ impl World {
         }
         false
     }
+    fn reflected_color(&self, comps: Computations, remaining: u32) -> Color {
+        if remaining == 0 {
+            return color(0.0, 0.0, 0.0);
+        }
+        if comps.object.get_material().reflective == 0.0 {
+            return black();
+        }
+        let reflect_ray = ray(comps.over_point, comps.reflectv);
+        let col = self.color_at(reflect_ray, remaining - 1);
+        col * comps.object.get_material().reflective
+    }
+    fn refracted_color(&self, comps: Computations, remaining: u32) -> Color {
+        if remaining == 0 {
+            return black();
+        }
+        if comps.object.get_material().transparency == 0.0 {
+            return black();
+        }
+        let n_ratio = comps.n1 / comps.n2;
+        let cos_i = comps.eyev.dot(comps.normalv);
+        let sin2_t = n_ratio.powi(2) * (1.0 - cos_i.powi(2));
+        if sin2_t > 1.0 {
+            return black();
+        }
+        let cos_t = (1.0 - sin2_t).sqrt();
+        let direction = comps.normalv * (n_ratio * cos_i - cos_t) - comps.eyev * n_ratio;
+        let refract_ray = ray(comps.under_point, direction);
+        self.color_at(refract_ray, remaining - 1) * comps.object.material.transparency
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Computations {
     t: f32,
-    object: Object,
+    object: Shape,
     point: Point,
     eyev: Vector,
     normalv: Vector,
     inside: bool,
-    over_point: Point
+    over_point: Point,
+    reflectv: Vector,
+    n1: f32,
+    n2: f32,
+    under_point: Point,
+}
+
+impl Computations {
+    fn schlick(&self) -> f32 {
+        let mut cos = self.eyev.dot(self.normalv);
+        if self.n1 > self.n2 {
+            let n = self.n1 / self.n2;
+            let sin2_t = n.powi(2) * (1.0 - cos.powi(2));
+            if sin2_t > 1.0 {
+                return 1.0;
+            }
+            let cos_t = (1.0 - sin2_t).sqrt();
+            cos = cos_t;
+        }
+        let r0 = ((self.n1-self.n2)/(self.n1 + self.n2)).powi(2);
+        r0 + (1.0 - r0) * (1.0 - cos).powi(5)
+    }
 }
 
 impl Intersection {
-    fn prepare_computations(&self, r: Ray) -> Computations {
+    fn prepare_computations(&self, r: Ray, xs: &Vec<Intersection>) -> Computations {
         let p = r.position(self.t);
         let mut comps = Computations {
             t: self.t,
             object: self.object,
             point: p,
             eyev: -r.direction,
-            normalv: match self.object {
-                Object::S(s) => s.normal_at(p),
-                Object::P(pl) => pl.normal_at(p)
-            },
+            normalv: self.object.normal_at(p),
             inside: false,
-            over_point: point(0.0, 0.0, 0.0)
+            over_point: point(0.0, 0.0, 0.0),
+            reflectv: vector(0.0, 0.0, 0.0),
+            n1: 1.0,
+            n2: 1.0,
+            under_point: point(0.0, 0.0, 0.0),
         };
+        let mut containers: Vec<Shape> = Vec::new();
+        for i in xs.iter() {
+            if i == self {
+                if containers.is_empty() {
+                    comps.n1 = 1.0;
+                } else {
+                    comps.n1 = containers.last().unwrap().get_material().refractive_index;
+                }
+            }
+            if containers.contains(&i.object) {
+                let idx = containers.iter().position(|&x| x == i.object).unwrap();
+                containers.remove(idx);
+            } else {
+                containers.push(i.object);
+            }
+            if i == self {
+                if containers.is_empty() {
+                    comps.n2 = 1.0;
+                } else {
+                    comps.n2 = containers.last().unwrap().get_material().refractive_index;
+                }
+                break;
+            }
+        }
         if comps.normalv.dot(comps.eyev) < 0.0 {
             comps.inside = true;
             comps.normalv = -comps.normalv
         }
-        comps.over_point = comps.point + comps.normalv * 0.00001;
+        comps.over_point = comps.point + comps.normalv * EPSILON;
+        comps.under_point = comps.point - comps.normalv * EPSILON;
+        comps.reflectv = r.direction.reflect(comps.normalv);
         comps
     }
 }
@@ -830,120 +968,142 @@ fn render(c: Camera, w: World) -> Canvas {
     for y in 0..c.vsize {
         for x in 0..c.hsize {
             let r = c.ray_for_pixel(x, y);
-            let color = w.color_at(r);
+            let color = w.color_at(r, 5);
             image.write_pixel(x, y, color);
         }
     }
     image
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Plane {
-    transform: Matrix4x4<f32>,
-    material: Material,
-}
-
-fn plane() -> Plane {
-    Plane {
+fn plane() -> Shape {
+    Shape {
+        typ: ShapeType::Plane,
         transform: identity_matrix(),
-        material: material()
+        material: material(),
     }
 }
 
-impl Shape for Plane {
-    fn get_transform(&self) -> Matrix4x4<f32> {
-        self.transform
-    }
-    fn local_normal_at(&self, p: Point) -> Vector {
-        vector(0.0, 1.0, 0.0)
-    }
-    fn local_intersect(&self, r: Ray) -> Vec<Intersection> {
-        if r.direction.y.abs() < 0.00001 {
-            vec![]
-        } else {
-            let t = -r.origin.y / r.direction.y;
-            vec![intersection(t, Object::P(*self))]
-        }
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PatType {
+    Stripe,
+    Gradient,
+    Ring,
+    Checker,
+    Test,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Pattern {
+    typ: PatType,
+    a: Color,
+    b: Color,
+    transform: Matrix4x4<f32>,
+}
+
+fn stripe_pattern(a: Color, b: Color) -> Pattern {
+    Pattern {
+        typ: PatType::Stripe,
+        a,
+        b,
+        transform: identity_matrix(),
     }
 }
 
-impl Plane {
-    // fn intersect(&self, r: Ray) -> Vec<Intersection> {
-    //     let local_ray = r.transform(self.transform.inverse());
-
-    // }
+fn gradient_pattern(a: Color, b: Color) -> Pattern {
+    Pattern {
+        typ: PatType::Gradient,
+        a,
+        b,
+        transform: identity_matrix(),
+    }
 }
 
-fn main1() {
-    let ray_origin = point(0.0, 0.0, -5.0);
-    let wall_z = 10.0;
-    let wall_size = 7.0;
-    let canvas_pixels = 256;
-    let pixel_size = wall_size / canvas_pixels as f32;
-    let half = wall_size / 2.0;
-    let mut canvas = canvas(canvas_pixels, canvas_pixels);
-    let mut shape = sphere();
-    shape.material = material();
-    shape.material.color = color(1.0, 0.2, 1.0);
-    let light_pos = point(-10.0, 10.0, -10.0);
-    let light_col = color(1.0, 1.0, 1.0);
-    let light = point_light(light_pos, light_col);
-    for y in 0..canvas_pixels {
-        let world_y = half - pixel_size * y as f32;
-        for x in 0..canvas_pixels {
-            let world_x = -half + pixel_size * x as f32;
-            let position = point(world_x, world_y, wall_z);
-            let r = ray(ray_origin, (position - ray_origin).normalize());
-            let xs = shape.intersect(r);
-            if let Some(t) = hit(xs) {
-                let p = r.position(t.t);
-                let (norm, mat) = match t.object {
-                    Object::S(s) => (s.normal_at(p), s.material),
-                    Object::P(pl) => (pl.normal_at(p), pl.material)
-                };
-                let eye = -r.direction;
-                let colr = lighting(mat, light, p, eye, norm, false);
-                canvas.write_pixel(x, y, colr);
+fn ring_pattern(a: Color, b: Color) -> Pattern {
+    Pattern {
+        typ: PatType::Ring,
+        a,
+        b,
+        transform: identity_matrix(),
+    }
+}
+
+fn checkers_pattern(a: Color, b: Color) -> Pattern {
+    Pattern {
+        typ: PatType::Checker,
+        a,
+        b,
+        transform: identity_matrix(),
+    }
+}
+
+impl Pattern {
+    fn pattern_at(&self, p: Point) -> Color {
+        match self.typ {
+            PatType::Stripe => {
+                if p.x.floor() as i64 % 2 == 0 {
+                    self.a
+                } else {
+                    self.b
+                }
             }
+            PatType::Gradient => {
+                let distance = self.b - self.a;
+                let fraction = p.x - p.x.floor();
+                self.a + distance * fraction
+            }
+            PatType::Ring => {
+                if (p.x * p.x + p.z * p.z).sqrt() as i64 % 2 == 0 {
+                    self.a
+                } else {
+                    self.b
+                }
+            }
+            PatType::Checker => {
+                if (p.x.trunc() + p.y.trunc() + p.z.trunc()) as i64 % 2 == 0 {
+                    self.a
+                } else {
+                    self.b
+                }
+            }
+            PatType::Test => color(p.x, p.y, p.z),
         }
     }
-    println!("{}", canvas.to_ppm());
+    fn stripe_at_object(&self, obj: Shape, p: Point) -> Color {
+        let transform = obj.get_transform();
+        let op = transform.inverse() * p;
+        let pp = self.transform.inverse() * op;
+        self.pattern_at(pp)
+    }
 }
 
 fn main() {
     use std::f32::consts::PI;
-    use Object::{S, P};
 
     let mut floor = plane();
     floor.material = material();
     floor.material.color = color(1.0, 0.9, 0.9);
     floor.material.specular = 0.0;
+    floor.material.pattern = Some(stripe_pattern(white(), black()));
+    floor.material.reflective = 0.5;
 
     let mut left_wall = plane();
-    left_wall.transform = translation(0.0, 0.0, 5.0)
-        * rotation_y(-PI / 4.0)
-        * rotation_x(PI / 2.0);
+    left_wall.transform = translation(0.0, 0.0, 5.0) * rotation_y(-PI / 4.0) * rotation_x(PI / 2.0);
     left_wall.material = floor.material;
+    left_wall.material.reflective = 0.0;
+    left_wall.material.pattern = None;
 
     let mut right_wall = plane();
-    right_wall.transform = translation(0.0, 0.0, 5.0)
-        * rotation_y(PI / 4.0)
-        * rotation_x(PI / 2.0);
+    right_wall.transform = translation(0.0, 0.0, 5.0) * rotation_y(PI / 4.0) * rotation_x(PI / 2.0);
     right_wall.material = floor.material;
+    right_wall.material.reflective = 0.0;
+    right_wall.material.pattern = None;
 
-    let mut middle = sphere();
+    let mut middle = glass_sphere();
     middle.transform = translation(-0.5, 1.0, 0.5);
-    middle.material = material();
-    middle.material.color = color(0.1, 1.0, 0.5);
-    middle.material.diffuse = 0.7;
-    middle.material.specular = 0.3;
+    middle.material.reflective = 1.0;
 
-    let mut right = sphere();
+    let mut right = glass_sphere();
     right.transform = translation(1.5, 0.5, -0.5) * scaling(0.5, 0.5, 0.5);
-    right.material = material();
-    right.material.color = color(0.5, 1.0, 0.1);
-    right.material.diffuse = 0.7;
-    right.material.specular = 0.3;
+    right.material.reflective = 1.0;
 
     let mut left = sphere();
     left.transform = translation(-1.5, 0.33, -0.75) * scaling(0.33, 0.33, 0.33);
@@ -954,7 +1114,7 @@ fn main() {
 
     let mut w = world();
     w.light = Some(point_light(point(-10.0, 10.0, -10.0), color(1.0, 1.0, 1.0)));
-    w.objects = vec![P(floor), P(left_wall), P(right_wall), S(middle), S(right), S(left)];
+    w.objects = vec![floor, left_wall, right_wall, middle, right, left];
     let mut cam = camera(1000, 500, PI / 3.0);
     cam.transform = view_transform(
         point(0.0, 1.5, -5.0),
@@ -970,7 +1130,11 @@ mod tests {
     use std::f32::consts::PI;
 
     use crate::{
-        camera, canvas, color, default_world, hit, identity_matrix, intersection, intersections, lighting, material, plane, point, point_light, ray, render, rotation_x, rotation_y, rotation_z, scaling, shearing, sphere, translation, tuple, vector, view_transform, world, Matrix2x2, Matrix3x3, Matrix4x4, Object, Shape
+        black, camera, canvas, checkers_pattern, color, default_world, glass_sphere,
+        gradient_pattern, hit, identity_matrix, intersection, intersections, lighting, material,
+        plane, point, point_light, ray, render, ring_pattern, rotation_x, rotation_y, rotation_z,
+        scaling, shearing, sphere, stripe_pattern, translation, tuple, vector, view_transform,
+        white, world, Intersection, Matrix2x2, Matrix3x3, Matrix4x4, Pattern, Tuple, EPSILON
     };
 
     #[test]
@@ -1051,7 +1215,7 @@ mod tests {
             ),
             vector(1.0, 2.0, 3.0).normalize()
         );
-        assert!((1.0 - vector(1.0, 2.0, 3.0).normalize().magnitude()).abs() < 0.00001);
+        assert!((1.0 - vector(1.0, 2.0, 3.0).normalize().magnitude()).abs() < EPSILON);
     }
 
     #[test]
@@ -1485,8 +1649,8 @@ mod tests {
         let s = sphere();
         let xs = s.intersect(r);
         if xs.len() == 2 {
-            assert_eq!(xs[0].object, crate::Object::S(s));
-            assert_eq!(xs[1].object, crate::Object::S(s));
+            assert_eq!(xs[0].object, s);
+            assert_eq!(xs[1].object, s);
         } else {
             assert!(false);
         }
@@ -1495,13 +1659,13 @@ mod tests {
     #[test]
     fn aggregate_intersections() {
         let s = sphere();
-        let i = intersection(3.5, crate::Object::S(s));
+        let i = intersection(3.5, s);
         assert_eq!(i.t, 3.5);
-        assert_eq!(i.object, crate::Object::S(s));
+        assert_eq!(i.object, s);
 
         let s = sphere();
-        let i1 = intersection(1.0, crate::Object::S(s));
-        let i2 = intersection(2.0, crate::Object::S(s));
+        let i1 = intersection(1.0, s);
+        let i2 = intersection(2.0, s);
         let xs = intersections![i1, i2];
         assert_eq!(xs[0].t, 1.0);
         assert_eq!(xs[1].t, 2.0);
@@ -1510,8 +1674,8 @@ mod tests {
     #[test]
     fn hits() {
         let s = sphere();
-        let i1 = intersection(1.0, crate::Object::S(s));
-        let i2 = intersection(2.0, crate::Object::S(s));
+        let i1 = intersection(1.0, s);
+        let i2 = intersection(2.0, s);
         let xs = intersections![i1, i2];
         if let Some(i) = hit(xs) {
             assert_eq!(i, i1);
@@ -1520,8 +1684,8 @@ mod tests {
         }
 
         let s = sphere();
-        let i1 = intersection(-1.0, crate::Object::S(s));
-        let i2 = intersection(1.0, crate::Object::S(s));
+        let i1 = intersection(-1.0, s);
+        let i2 = intersection(1.0, s);
         let xs = intersections![i1, i2];
         if let Some(i) = hit(xs) {
             assert_eq!(i, i2);
@@ -1530,18 +1694,18 @@ mod tests {
         }
 
         let s = sphere();
-        let i1 = intersection(-2.0, crate::Object::S(s));
-        let i2 = intersection(-1.0, crate::Object::S(s));
+        let i1 = intersection(-2.0, s);
+        let i2 = intersection(-1.0, s);
         let xs = intersections![i1, i2];
         if let Some(_) = hit(xs) {
             assert!(false);
         }
 
         let s = sphere();
-        let i1 = intersection(5.0, crate::Object::S(s));
-        let i2 = intersection(7.0, crate::Object::S(s));
-        let i3 = intersection(-3.0, crate::Object::S(s));
-        let i4 = intersection(2.0, crate::Object::S(s));
+        let i1 = intersection(5.0, s);
+        let i2 = intersection(7.0, s);
+        let i3 = intersection(-3.0, s);
+        let i4 = intersection(2.0, s);
         let xs = intersections![i1, i2, i3, i4];
         if let Some(i) = hit(xs) {
             assert_eq!(i, i4);
@@ -1740,8 +1904,8 @@ mod tests {
     fn precompute_intersection() {
         let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
         let shape = sphere();
-        let i = intersection(4.0, crate::Object::S(shape));
-        let comps = i.prepare_computations(r);
+        let i = intersection(4.0, shape);
+        let comps = i.prepare_computations(r, &vec![i]);
         assert_eq!(comps.t, i.t);
         assert_eq!(comps.object, i.object);
         assert_eq!(comps.point, point(0.0, 0.0, -1.0));
@@ -1753,14 +1917,14 @@ mod tests {
     fn inside_outside_intersections() {
         let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
         let shape = sphere();
-        let i = intersection(4.0, crate::Object::S(shape));
-        let comps = i.prepare_computations(r);
+        let i = intersection(4.0, shape);
+        let comps = i.prepare_computations(r, &vec![i]);
         assert_eq!(comps.inside, false);
 
         let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 0.0, 1.0));
         let shape = sphere();
-        let i = intersection(1.0, crate::Object::S(shape));
-        let comps = i.prepare_computations(r);
+        let i = intersection(1.0, shape);
+        let comps = i.prepare_computations(r, &vec![i]);
         assert_eq!(comps.point, point(0.0, 0.0, 1.0));
         assert_eq!(comps.eyev, vector(0.0, 0.0, -1.0));
         assert_eq!(comps.inside, true);
@@ -1773,8 +1937,8 @@ mod tests {
         let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
         let shape = w.objects[0];
         let i = intersection(4.0, shape);
-        let comps = i.prepare_computations(r);
-        let c = w.shade_hit(comps);
+        let comps = i.prepare_computations(r, &vec![i]);
+        let c = w.shade_hit(comps, 5);
         assert_eq!(c, color(0.38066125, 0.4758265, 0.28549594));
 
         let mut w = default_world();
@@ -1782,8 +1946,8 @@ mod tests {
         let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 0.0, 1.0));
         let shape = w.objects[1];
         let i = intersection(0.5, shape);
-        let comps = i.prepare_computations(r);
-        let c = w.shade_hit(comps);
+        let comps = i.prepare_computations(r, &vec![i]);
+        let c = w.shade_hit(comps, 5);
         assert_eq!(c, color(0.9049845, 0.9049845, 0.9049845));
     }
 
@@ -1791,25 +1955,19 @@ mod tests {
     fn color_at() {
         let w = default_world();
         let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 1.0, 0.0));
-        let c = w.color_at(r);
+        let c = w.color_at(r, 5);
         assert_eq!(c, color(0.0, 0.0, 0.0));
 
         let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
-        let c = w.color_at(r);
+        let c = w.color_at(r, 5);
         assert_eq!(c, color(0.38066125, 0.4758265, 0.28549594));
 
         let mut w = default_world();
-        if let crate::Object::S(mut outer) = w.objects[0] {
-            outer.material.ambient = 1.0;
-            w.objects[0] = crate::Object::S(outer);
-        }
-        if let crate::Object::S(mut inner) = w.objects[1] {
-            inner.material.ambient = 1.0;
-            w.objects[1] = crate::Object::S(inner);
-            let r = ray(point(0.0, 0.0, 0.75), vector(0.0, 0.0, -1.0));
-            let c = w.color_at(r);
-            assert_eq!(c, inner.material.color);
-        }
+        w.objects[0].material.ambient = 1.0;
+        w.objects[1].material.ambient = 1.0;
+        let r = ray(point(0.0, 0.0, 0.75), vector(0.0, 0.0, -1.0));
+        let c = w.color_at(r, 5);
+        assert_eq!(c, w.objects[1].material.color);
     }
 
     #[test]
@@ -1933,14 +2091,14 @@ mod tests {
         let mut w = world();
         w.light = Some(point_light(point(0.0, 0.0, -10.0), color(1.0, 1.0, 1.0)));
         let s1 = sphere();
-        w.objects.push(Object::S(s1));
+        w.objects.push(s1);
         let mut s2 = sphere();
         s2.set_transform(translation(0.0, 0.0, 10.0));
-        w.objects.push(Object::S(s2));
+        w.objects.push(s2);
         let r = ray(point(0.0, 0.0, 5.0), vector(0.0, 0.0, 1.0));
-        let i = intersection(4.0, Object::S(s2));
-        let comps = i.prepare_computations(r);
-        let c= w.shade_hit(comps);
+        let i = intersection(4.0, s2);
+        let comps = i.prepare_computations(r, &vec![i]);
+        let c = w.shade_hit(comps, 5);
         assert_eq!(c, color(0.1, 0.1, 0.1));
     }
 
@@ -1949,9 +2107,9 @@ mod tests {
         let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
         let mut shape = sphere();
         shape.set_transform(translation(0.0, 0.0, 1.0));
-        let i = intersection(5.0, Object::S(shape));
-        let comps = i.prepare_computations(r);
-        assert!(comps.over_point.z < -0.00001 / 2.0);
+        let i = intersection(5.0, shape);
+        let comps = i.prepare_computations(r, &vec![i]);
+        assert!(comps.over_point.z < -EPSILON / 2.0);
         assert!(comps.point.z > comps.over_point.z);
     }
 
@@ -1981,7 +2139,7 @@ mod tests {
         let xs = p.local_intersect(r);
         if xs.len() == 1 {
             assert_eq!(xs[0].t, 1.0);
-            assert_eq!(xs[0].object, Object::P(p));
+            assert_eq!(xs[0].object, p);
         } else {
             assert!(false);
         }
@@ -1990,9 +2148,383 @@ mod tests {
         let xs = p.local_intersect(r);
         if xs.len() == 1 {
             assert_eq!(xs[0].t, 1.0);
-            assert_eq!(xs[0].object, Object::P(p));
+            assert_eq!(xs[0].object, p);
         } else {
             assert!(false);
         }
+    }
+
+    #[test]
+    fn striped_pattern() {
+        let pattern = stripe_pattern(white(), black());
+        assert_eq!(pattern.a, white());
+        assert_eq!(pattern.b, black());
+
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 1.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 2.0, 0.0)), white());
+
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 1.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 2.0)), white());
+
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.9, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(1.0, 0.0, 0.0)), black());
+        assert_eq!(pattern.pattern_at(point(-0.1, 0.0, 0.0)), black());
+        assert_eq!(pattern.pattern_at(point(-1.0, 0.0, 0.0)), black());
+        assert_eq!(pattern.pattern_at(point(-1.1, 0.0, 0.0)), white());
+    }
+
+    #[test]
+    fn lighting_with_pattern() {
+        let mut m = material();
+        m.pattern = Some(stripe_pattern(white(), black()));
+        m.ambient = 1.0;
+        m.diffuse = 0.0;
+        m.specular = 0.0;
+        let eyev = vector(0.0, 0.0, -1.0);
+        let normalv = vector(0.0, 0.0, -1.0);
+        let light = point_light(point(0.0, 0.0, -10.0), white());
+        let c1 = lighting(m, light, point(0.9, 0.0, 0.0), eyev, normalv, false);
+        let c2 = lighting(m, light, point(1.1, 0.0, 0.0), eyev, normalv, false);
+        assert_eq!(c1, white());
+        assert_eq!(c2, black());
+    }
+
+    #[test]
+    fn stripes_with_objects() {
+        let mut object = sphere();
+        object.transform = scaling(2.0, 2.0, 2.0);
+        let pattern = stripe_pattern(white(), black());
+        let c = pattern.stripe_at_object(object, point(1.5, 0.0, 0.0));
+        assert_eq!(c, white());
+
+        let object = sphere();
+        let mut pattern = stripe_pattern(white(), black());
+        pattern.transform = scaling(2.0, 2.0, 2.0);
+        let c = pattern.stripe_at_object(object, point(1.5, 0.0, 0.0));
+        assert_eq!(c, white());
+
+        let mut object = sphere();
+        object.transform = scaling(2.0, 2.0, 2.0);
+        let mut pattern = stripe_pattern(white(), black());
+        pattern.transform = translation(0.5, 0.0, 0.0);
+        let c = pattern.stripe_at_object(object, point(2.5, 0.0, 0.0));
+        assert_eq!(c, white());
+    }
+
+    #[test]
+    fn grad_pattern() {
+        let pattern = gradient_pattern(white(), black());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(
+            pattern.pattern_at(point(0.25, 0.0, 0.0)),
+            color(0.75, 0.75, 0.75)
+        );
+        assert_eq!(
+            pattern.pattern_at(point(0.5, 0.0, 0.0)),
+            color(0.5, 0.5, 0.5)
+        );
+        assert_eq!(
+            pattern.pattern_at(point(0.75, 0.0, 0.0)),
+            color(0.25, 0.25, 0.25)
+        );
+    }
+
+    #[test]
+    fn rng_pattern() {
+        let pattern = ring_pattern(white(), black());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(1.0, 0.0, 0.0)), black());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 1.0)), black());
+        assert_eq!(pattern.pattern_at(point(0.708, 0.0, 0.708)), black());
+    }
+
+    #[test]
+    fn check_pattern() {
+        let pattern = checkers_pattern(white(), black());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.99, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(1.01, 0.0, 0.0)), black());
+
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.99, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 1.01, 0.0)), black());
+
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.0)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 0.99)), white());
+        assert_eq!(pattern.pattern_at(point(0.0, 0.0, 1.01)), black());
+    }
+
+    #[test]
+    fn precomputing_reflection() {
+        let shape = plane();
+        let r = ray(
+            point(0.0, 1.0, -1.0),
+            vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
+        );
+        let i = intersection(2f32.sqrt(), shape);
+        let comps = i.prepare_computations(r, &vec![i]);
+        assert_eq!(
+            comps.reflectv,
+            vector(0.0, 2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0)
+        )
+    }
+
+    #[test]
+    fn reflections() {
+        let mut w = default_world();
+        let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 0.0, 1.0));
+        w.objects[1].material.ambient = 1.0;
+        let i = intersection(1.0, w.objects[1]);
+        let comps = i.prepare_computations(r, &vec![i]);
+        let col = w.reflected_color(comps, 5);
+        assert_eq!(col, color(0.0, 0.0, 0.0));
+
+        let mut w = default_world();
+        let mut shape = plane();
+        shape.material.reflective = 0.5;
+        shape.transform = translation(0.0, -1.0, 0.0);
+        w.objects.push(shape);
+        let r = ray(
+            point(0.0, 0.0, -3.0),
+            vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
+        );
+        let i = intersection(2f32.sqrt(), shape);
+        let comps = i.prepare_computations(r, &vec![i]);
+        let col = w.reflected_color(comps, 5);
+        assert_eq!(col, color(0.190332, 0.237915, 0.1427491));
+
+        let mut w = default_world();
+        let mut shape = plane();
+        shape.material.reflective = 0.5;
+        shape.transform = translation(0.0, -1.0, 0.0);
+        w.objects.push(shape);
+        let r = ray(
+            point(0.0, 0.0, -3.0),
+            vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
+        );
+        let i = intersection(2f32.sqrt(), shape);
+        let comps = i.prepare_computations(r, &vec![i]);
+        let col = w.shade_hit(comps, 5);
+        assert_eq!(col, color(0.876757, 0.9243403, 0.829174));
+    }
+
+    #[test]
+    fn avoid_recursion() {
+        let mut w = world();
+        w.light = Some(point_light(point(0.0, 0.0, 0.0), color(1.0, 1.0, 1.0)));
+        let mut lower = plane();
+        lower.material.reflective = 1.0;
+        lower.transform = translation(0.0, -1.0, 0.0);
+        w.objects.push(lower);
+        let mut upper = plane();
+        upper.material.reflective = 1.0;
+        upper.transform = translation(0.0, 1.0, 0.0);
+        w.objects.push(upper);
+        let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 1.0, 0.0));
+        w.color_at(r, 5);
+    }
+
+    #[test]
+    fn recursion() {
+        let mut w = default_world();
+        let mut shape = plane();
+        shape.material.reflective = 0.5;
+        shape.transform = translation(0.0, -1.0, 0.0);
+        w.objects.push(shape);
+        let r = ray(
+            point(0.0, 0.0, -3.0),
+            vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
+        );
+        let i = intersection(2f32.sqrt(), shape);
+        let comps = i.prepare_computations(r, &vec![i]);
+        let col = w.reflected_color(comps, 0);
+        assert_eq!(col, black());
+    }
+
+    #[test]
+    fn finding_n1_n2() {
+        let mut a = glass_sphere();
+        a.transform = scaling(2.0, 2.0, 2.0);
+        a.material.refractive_index = 1.5;
+
+        let mut b = glass_sphere();
+        b.transform = translation(0.0, 0.0, -0.25);
+        b.material.refractive_index = 2.0;
+
+        let mut c = glass_sphere();
+        c.transform = translation(0.0, 0.0, 0.25);
+        c.material.refractive_index = 2.5;
+
+        let r = ray(point(0.0, 0.0, -4.0), vector(0.0, 0.0, 1.0));
+        let xs: Vec<Intersection> = vec![
+            (2.0, a),
+            (2.75, b),
+            (3.25, c),
+            (4.75, b),
+            (5.25, c),
+            (6.0, a),
+        ]
+        .iter()
+        .map(|&(t, o)| intersection(t, o))
+        .collect();
+        let comps = xs[0].prepare_computations(r, &xs);
+        assert_eq!(comps.n1, 1.0);
+        assert_eq!(comps.n2, 1.5);
+        let comps = xs[1].prepare_computations(r, &xs);
+        assert_eq!(comps.n1, 1.5);
+        assert_eq!(comps.n2, 2.0);
+        let comps = xs[2].prepare_computations(r, &xs);
+        assert_eq!(comps.n1, 2.0);
+        assert_eq!(comps.n2, 2.5);
+        let comps = xs[3].prepare_computations(r, &xs);
+        assert_eq!(comps.n1, 2.5);
+        assert_eq!(comps.n2, 2.5);
+        let comps = xs[4].prepare_computations(r, &xs);
+        assert_eq!(comps.n1, 2.5);
+        assert_eq!(comps.n2, 1.5);
+        let comps = xs[5].prepare_computations(r, &xs);
+        assert_eq!(comps.n1, 1.5);
+        assert_eq!(comps.n2, 1.0);
+    }
+
+    #[test]
+    fn under_point() {
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let mut shape = glass_sphere();
+        shape.transform = translation(0.0, 0.0, 1.0);
+        let i = intersection(5.0, shape);
+        let xs = intersections![i];
+        let comps = i.prepare_computations(r, &xs);
+        assert!(comps.under_point.z > EPSILON / 2.0);
+        assert!(comps.point.z < comps.under_point.z);
+    }
+
+    fn test_pattern() -> Pattern {
+        Pattern {
+            typ: crate::PatType::Test,
+            a: white(),
+            b: black(),
+            transform: identity_matrix(),
+        }
+    }
+
+    #[test]
+    fn refract_color() {
+        let mut w = default_world();
+        let shape = w.objects[0];
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let xs = intersections![intersection(4.0, shape), intersection(6.0, shape)];
+        let comps = xs[0].prepare_computations(r, &xs);
+        let c = w.refracted_color(comps, 5);
+        assert_eq!(c, color(0.0, 0.0, 0.0));
+
+        w.objects[0].material.transparency = 1.0;
+        w.objects[0].material.refractive_index = 1.5;
+        let r = ray(point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0));
+        let xs = intersections![intersection(4.0, shape), intersection(6.0, shape)];
+        let comps = xs[0].prepare_computations(r, &xs);
+        let c = w.refracted_color(comps, 0);
+        assert_eq!(c, color(0.0, 0.0, 0.0));
+
+        w.objects[0].material.transparency = 1.0;
+        w.objects[0].material.refractive_index = 1.5;
+        let r = ray(point(0.0, 0.0, 2f32.sqrt() / 2.0), vector(0.0, 1.0, 0.0));
+        let xs = intersections![
+            intersection(-2f32.sqrt() / 2.0, shape),
+            intersection(2f32.sqrt() / 2.0, shape)
+        ];
+        let comps = xs[1].prepare_computations(r, &xs);
+        let c = w.refracted_color(comps, 5);
+        assert_eq!(c, color(0.0, 0.0, 0.0));
+
+        let mut w = default_world();
+        w.objects[0].material.ambient = 1.0;
+        w.objects[0].material.pattern = Some(test_pattern());
+        w.objects[1].material.transparency = 1.0;
+        w.objects[1].material.refractive_index = 1.5;
+        let r = ray(point(0.0, 0.0, 0.1), vector(0.0, 1.0, 0.0));
+        let xs = intersections![
+            intersection(-0.9899, w.objects[0]),
+            intersection(-0.4899, w.objects[1]),
+            intersection(0.4899, w.objects[1]),
+            intersection(0.9899, w.objects[0])
+        ];
+        let comps = xs[2].prepare_computations(r, &xs);
+        let c = w.refracted_color(comps, 5);
+        assert_eq!(c, color(0.0, 0.998874, 0.0472189));
+    }
+
+    #[test]
+    fn shade_hit_transparent() {
+        let mut w = default_world();
+        let mut floor = plane();
+        floor.transform = translation(0.0, -1.0, 0.0);
+        floor.material.transparency = 0.5;
+        floor.material.refractive_index = 1.5;
+        w.objects.push(floor);
+        let mut ball = sphere();
+        ball.material.color = color(1.0, 0.0, 0.0);
+        ball.material.ambient = 0.5;
+        ball.transform = translation(0.0, -3.5, -0.5);
+        w.objects.push(ball);
+        let r = ray(
+            point(0.0, 0.0, -3.0),
+            vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0),
+        );
+        let xs = intersections![intersection(2f32.sqrt(), floor)];
+        let comps = xs[0].prepare_computations(r, &xs);
+        let c = w.shade_hit(comps, 5);
+        assert_eq!(c, color(0.93642, 0.68642, 0.68642));
+    }
+
+    #[test]
+    fn fresnel() {
+        let shape = glass_sphere();
+        let r = ray(point(0.0, 0.0, 2f32.sqrt() / 2.0), vector(0.0, 1.0, 0.0));
+        let xs = intersections![
+            intersection(-2f32.sqrt() / 2.0, shape),
+            intersection(2f32.sqrt() / 2.0, shape)
+        ];
+        let comps = xs[1].prepare_computations(r, &xs);
+        let reflectance = comps.schlick();
+        assert_eq!(reflectance, 1.0);
+
+        let shape = glass_sphere();
+        let r = ray(point(0.0, 0.0, 0.0), vector(0.0, 1.0, 0.0));
+        let xs = intersections![intersection(-1.0, shape), intersection(1.0, shape)];
+        let comps = xs[1].prepare_computations(r, &xs);
+        let reflectance = comps.schlick();
+        assert!((reflectance - 0.04).abs() < EPSILON);
+
+        let shape = glass_sphere();
+        let r = ray(point(0.0, 0.99, -2.0), vector(0.0, 0.0, 1.0));
+        let xs = intersections![intersection(1.8589, shape)];
+        let comps = xs[0].prepare_computations(r, &xs);
+        let reflectance = comps.schlick();
+        assert!((reflectance - 0.48873).abs() < EPSILON);
+    }
+
+    #[test]
+    fn fresnel_in_shade_hit() {
+        let mut w = default_world();
+        let r = ray(point(0.0, 0.0, -3.0), vector(0.0, -2f32.sqrt() / 2.0, 2f32.sqrt() / 2.0));
+        let mut floor = plane();
+        floor.transform = translation(0.0, -1.0, 0.0);
+        floor.material.reflective = 0.5;
+        floor.material.transparency = 0.5;
+        floor.material.refractive_index = 1.5;
+        w.objects.push(floor);
+        let mut ball = sphere();
+        ball.material.color = color(1.0, 0.0, 0.0);
+        ball.material.ambient = 0.5;
+        ball.transform = translation(0.0, -3.5, -0.5);
+        w.objects.push(ball);
+        let xs = intersections!(intersection(2f32.sqrt(), floor));
+        let comps = xs[0].prepare_computations(r, &xs);
+        let c = w.shade_hit(comps, 5);
+        assert_eq!(c, color(0.93391, 0.69643, 0.69243));
     }
 }
