@@ -607,6 +607,10 @@ impl Shape {
                 let tmin = xtmin.max(ytmin.max(ztmin));
                 let tmax = xtmax.min(ytmax.min(ztmax));
 
+                if tmin > tmax {
+                    return intersections![];
+                }
+
                 intersections![intersection(tmin, *self), intersection(tmax, *self)]
             }
         }
@@ -615,7 +619,16 @@ impl Shape {
         match self.typ {
             ShapeType::Sphere => p - point(0.0, 0.0, 0.0),
             ShapeType::Plane => vector(0.0, 1.0, 0.0),
-            ShapeType::Cube => todo!(),
+            ShapeType::Cube => {
+                let maxc = p.x.abs().max(p.y.abs().max(p.z.abs()));
+                if maxc == p.x.abs() {
+                    return vector(p.x, 0.0, 0.0);
+                }
+                if maxc == p.y.abs() {
+                        return vector(0.0, p.y, 0.0);
+                }
+                vector(0.0, 0.0, p.z)
+            },
         }
     }
     fn intersect(&self, ray: Ray) -> Vec<Intersection> {
@@ -1145,7 +1158,7 @@ fn main() {
     right.transform = translation(1.5, 0.5, -0.5) * scaling(0.5, 0.5, 0.5);
     right.material.reflective = 1.0;
 
-    let mut left = sphere();
+    let mut left = cube();
     left.transform = translation(-1.5, 0.33, -0.75) * scaling(0.33, 0.33, 0.33);
     left.material = material();
     left.material.color = color(1.0, 0.8, 0.1);
@@ -2592,6 +2605,43 @@ mod tests {
             } else {
                 assert!(false);
             }
+        }
+    }
+
+    #[test]
+    fn missed_the_cube() {
+        let examples = vec![
+            (point(-2.0, 0.0, 0.0), vector(0.2673, 0.5345, 0.8018)),
+            (point(0.0, -2.0, 0.0), vector(0.8018, 0.2673, 0.5345)),
+            (point(0.0, 0.0, -2.0), vector(0.5345, 0.8018, 0.2673)),
+            (point(2.0, 0.0, 2.0), vector(0.0, 0.0, -1.0)),
+            (point(0.0, 2.0, 2.0), vector(0.0, -1.0, 0.0)),
+            (point(2.0, 2.0, 0.0), vector(-1.0, 0.0, 0.0)),
+        ];
+        let c = cube();
+        for &(or, dir) in examples.iter() {
+            let r = ray(or, dir);
+            let xs = c.local_intersect(r);
+            assert!(xs.len() == 0);
+        }
+    }
+
+    #[test]
+    fn normals_on_a_cube() {
+        let examples = vec![
+            (point(1.0, 0.5, -0.8), vector(1.0, 0.0, 0.0)),
+            (point(-1.0, -0.2, 0.9), vector(-1.0, 0.0, 0.0)),
+            (point(-0.4, 1.0, -0.1), vector(0.0, 1.0, 0.0)),
+            (point(0.3, -1.0, -0.7), vector(0.0, -1.0, 0.0)),
+            (point(-0.6, 0.3, 1.0), vector(0.0, 0.0, 1.0)),
+            (point(0.4, 0.4, -1.0), vector(0.0, 0.0, -1.0)),
+            (point(1.0, 1.0, 1.0), vector(1.0, 0.0, 0.0)),
+            (point(-1.0, -1.0, -1.0), vector(-1.0, 0.0, 0.0)),
+        ];
+        let c = cube();
+        for &(p, norm) in examples.iter() {
+            let n = c.local_normal_at(p);
+            assert_eq!(n, norm);
         }
     }
 }
