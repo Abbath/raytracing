@@ -480,10 +480,10 @@ fn ray(origin: Point, direction: Vector) -> Ray {
 }
 
 impl Ray {
-    fn position(self, t: f32) -> Point {
+    fn position(&self, t: f32) -> Point {
         self.origin + self.direction * t
     }
-    fn transform(self, t: Matrix4x4<f32>) -> Ray {
+    fn transform(&self, t: Matrix4x4<f32>) -> Ray {
         let o = t * self.origin;
         let d = t * self.direction;
         Ray {
@@ -491,34 +491,26 @@ impl Ray {
             direction: d,
         }
     }
+    fn check_cap_cylinder(&self, t: f32) -> bool {
+        let x = self.origin.x + t * self.direction.x;
+        let z = self.origin.z + t * self.direction.z;
+        (x.powi(2) + z.powi(2)) - 1.0 < EPSILON
+    }
+    fn check_cap_cone(&self, t: f32) -> bool {
+        let x = self.origin.x + t * self.direction.x;
+        let z = self.origin.z + t * self.direction.z;
+        let y = self.origin.y + t * self.direction.y;
+        (x.powi(2) + z.powi(2)) - y.abs() < EPSILON
+    }
 }
-
-// trait Shape {
-//     fn to_obj(&self) -> Object;
-//     fn get_transform(&self) -> Matrix4x4<f32>;
-//     fn set_transform(&mut self, t: Matrix4x4<f32>);
-//     fn get_material(&self) -> Material;
-//     fn set_material(&mut self, m: Material);
-//     fn local_intersect(&self, r: Ray) -> Vec<Intersection>;
-//     fn local_normal_at(&self, p: Point) -> Vector;
-//     fn intersect(&self, ray: Ray) -> Vec<Intersection> {
-//         let r = ray.transform(self.get_transform().inverse());
-//         self.local_intersect(r)
-//     }
-//     fn normal_at(&self, wp: Point) -> Vector {
-//         let op = self.get_transform().inverse() * wp;
-//         let on = self.local_normal_at(op);
-//         let mut wn = self.get_transform().inverse().transposed() * on;
-//         wn.w = 0.0;
-//         wn.normalize()
-//     }
-// }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ShapeType {
     Sphere,
     Plane,
     Cube,
+    Cylinder(f32, f32, bool),
+    Cone(f32, f32, bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -613,6 +605,74 @@ impl Shape {
 
                 intersections![intersection(tmin, *self), intersection(tmax, *self)]
             }
+            ShapeType::Cylinder(cmin, cmax, _) => {
+                let a = r.direction.x.powi(2) + r.direction.z.powi(2);
+                if a.abs() < EPSILON {
+                    let mut xs = intersections![];
+                    self.intersect_caps(r, &mut xs);
+                    return xs;
+                }
+                let b = 2.0 * r.origin.x * r.direction.x + 2.0 * r.origin.z * r.direction.z;
+                let c = r.origin.x.powi(2) + r.origin.z.powi(2) - 1.0;
+                let disc = b * b - 4.0 * a * c;
+                if disc < 0.0 {
+                    return intersections![];
+                }
+                let mut t0 = (-b - disc.sqrt()) / (2.0 * a);
+                let mut t1 = (-b + disc.sqrt()) / (2.0 * a);
+                if t0 > t1 {
+                    {
+                        (t0, t1) = (t1, t0);
+                    }
+                }
+                let mut xs = intersections![];
+                let y0 = r.origin.y + t0 * r.direction.y;
+                if cmin < y0 && y0 < cmax {
+                    xs.push(intersection(t0, *self));
+                }
+                let y1 = r.origin.y + t1 * r.direction.y;
+                if cmin < y1 && y1 < cmax {
+                    xs.push(intersection(t1, *self));
+                }
+                self.intersect_caps(r, &mut xs);
+                xs
+            }
+            ShapeType::Cone(cmin, cmax, _) => {
+                let a = r.direction.x.powi(2) - r.direction.y.powi(2) + r.direction.z.powi(2);
+
+                let b = 2.0
+                    * (r.origin.x * r.direction.x - r.origin.y * r.direction.y
+                        + r.origin.z * r.direction.z);
+
+                let c = r.origin.x.powi(2) - r.origin.y.powi(2) + r.origin.z.powi(2);
+                let mut xs = intersections![];
+                if a.abs() < EPSILON && !(b.abs() < EPSILON) {
+                    let t = c / (-2.0 * b);
+                    xs.push(intersection(t, *self));
+                } else {
+                    let discriminant = b.powi(2) - 4.0 * a * c;
+
+                    if discriminant < 0.0 {
+                        return xs;
+                    }
+
+                    let double_a = 2.0 * a;
+                    let t0 = (-b - discriminant.sqrt()) / double_a;
+                    let t1 = (-b + discriminant.sqrt()) / double_a;
+
+                    let y0 = r.origin.y + t0 * r.direction.y;
+                    if cmin < y0 && y0 < cmax {
+                        xs.push(intersection(t0, *self));
+                    }
+
+                    let y1 = r.origin.y + t1 * r.direction.y;
+                    if cmin < y1 && y1 < cmax {
+                        xs.push(intersection(t1, *self));
+                    }
+                }
+                self.intersect_caps(r, &mut xs);
+                xs
+            }
         }
     }
     fn local_normal_at(&self, p: Point) -> Vector {
@@ -625,10 +685,21 @@ impl Shape {
                     return vector(p.x, 0.0, 0.0);
                 }
                 if maxc == p.y.abs() {
-                        return vector(0.0, p.y, 0.0);
+                    return vector(0.0, p.y, 0.0);
                 }
                 vector(0.0, 0.0, p.z)
-            },
+            }
+            ShapeType::Cylinder(cmin, cmax, _) => {
+                let dist = p.x.powi(2) + p.z.powi(2);
+                if dist < 1.0 && p.y >= cmax - EPSILON {
+                    return vector(0.0, 1.0, 0.0);
+                }
+                if dist < 1.0 && p.y <= cmin + EPSILON {
+                    return vector(0.0, -1.0, 0.0);
+                }
+                vector(p.x, 0.0, p.z)
+            }
+            ShapeType::Cone(cmin, cmax, _) => todo!(),
         }
     }
     fn intersect(&self, ray: Ray) -> Vec<Intersection> {
@@ -641,6 +712,37 @@ impl Shape {
         let mut wn = self.get_transform().inverse().transposed() * on;
         wn.w = 0.0;
         wn.normalize()
+    }
+    fn intersect_caps(&self, r: Ray, xs: &mut Vec<Intersection>) {
+        match self.typ {
+            ShapeType::Cylinder(cmin, cmax, cap) => {
+                if !cap || r.direction.y.abs() < EPSILON {
+                    return;
+                }
+                let t = (cmin - r.origin.y) / r.direction.y;
+                if r.check_cap_cylinder(t) {
+                    xs.push(intersection(t, *self));
+                }
+                let t = (cmax - r.origin.y) / r.direction.y;
+                if r.check_cap_cylinder(t) {
+                    xs.push(intersection(t, *self));
+                }
+            }
+            ShapeType::Cone(cmin, cmax, cap) => {
+                if !cap || r.direction.y.abs() < EPSILON {
+                    return;
+                }
+                let t = (cmin - r.origin.y) / r.direction.y;
+                if r.check_cap_cone(t) {
+                    xs.push(intersection(t, *self));
+                }
+                let t = (cmax - r.origin.y) / r.direction.y;
+                if r.check_cap_cone(t) {
+                    xs.push(intersection(t, *self));
+                }
+            }
+            _ => panic!("Not supported"),
+        }
     }
 }
 
@@ -1128,6 +1230,22 @@ fn cube() -> Shape {
     }
 }
 
+fn cylinder() -> Shape {
+    Shape {
+        typ: ShapeType::Cylinder(-f32::INFINITY, f32::INFINITY, false),
+        transform: identity_matrix(),
+        material: material(),
+    }
+}
+
+fn cone() -> Shape {
+    Shape {
+        typ: ShapeType::Cone(-f32::INFINITY, f32::INFINITY, false),
+        transform: identity_matrix(),
+        material: material(),
+    }
+}
+
 fn main() {
     use std::f32::consts::PI;
 
@@ -1154,7 +1272,8 @@ fn main() {
     middle.transform = translation(-0.5, 1.0, 0.5);
     middle.material.reflective = 1.0;
 
-    let mut right = glass_sphere();
+    let mut right = cylinder();
+    right.typ = ShapeType::Cylinder(0.0, 1.0, true);
     right.transform = translation(1.5, 0.5, -0.5) * scaling(0.5, 0.5, 0.5);
     right.material.reflective = 1.0;
 
@@ -1183,11 +1302,12 @@ mod tests {
     use std::f32::consts::PI;
 
     use crate::{
-        black, camera, canvas, checkers_pattern, color, cube, default_world, glass_sphere,
-        gradient_pattern, hit, identity_matrix, intersection, intersections, lighting, material,
-        plane, point, point_light, ray, render, ring_pattern, rotation_x, rotation_y, rotation_z,
-        scaling, shearing, sphere, stripe_pattern, translation, tuple, vector, view_transform,
-        white, world, Intersection, Matrix2x2, Matrix3x3, Matrix4x4, Pattern, Tuple, EPSILON,
+        black, camera, canvas, checkers_pattern, color, cone, cube, cylinder, default_world,
+        glass_sphere, gradient_pattern, hit, identity_matrix, intersection, intersections,
+        lighting, material, plane, point, point_light, ray, render, ring_pattern, rotation_x,
+        rotation_y, rotation_z, scaling, shearing, sphere, stripe_pattern, translation, tuple,
+        vector, view_transform, white, world, Intersection, Matrix2x2, Matrix3x3, Matrix4x4,
+        Pattern, ShapeType, Tuple, EPSILON,
     };
 
     #[test]
@@ -2643,5 +2763,149 @@ mod tests {
             let n = c.local_normal_at(p);
             assert_eq!(n, norm);
         }
+    }
+
+    #[test]
+    fn missing_the_cylinder() {
+        let examples = vec![
+            (point(1.0, 0.0, 0.0), vector(0.0, 1.0, 0.0)),
+            (point(0.0, 0.0, 0.0), vector(0.0, 1.0, 0.0)),
+            (point(0.0, 0.0, -5.0), vector(1.0, 1.0, 1.1)),
+        ];
+        let c = cylinder();
+        for &(or, dir) in examples.iter() {
+            let d = dir.normalize();
+            let r = ray(or, d);
+            let xs = c.local_intersect(r);
+            assert!(xs.len() == 0);
+        }
+    }
+
+    #[test]
+    fn hitting_the_cylinder() {
+        let examples = vec![
+            (point(1.0, 0.0, -5.0), vector(0.0, 0.0, 1.0), 5.0, 5.0),
+            (point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0), 4.0, 6.0),
+            (
+                point(0.5, 0.0, -5.0),
+                vector(0.1, 1.0, 1.0),
+                6.808006,
+                7.0886984,
+            ),
+        ];
+        let cyl = cylinder();
+        for &(or, dir, t1, t2) in examples.iter() {
+            let d = dir.normalize();
+            let r = ray(or, d);
+            let xs = cyl.local_intersect(r);
+            assert_eq!(xs.len(), 2);
+            assert_eq!(xs[0].t, t1);
+            assert_eq!(xs[1].t, t2);
+        }
+    }
+
+    #[test]
+    fn normals_on_a_cylinder() {
+        let examples = vec![
+            (point(1.0, 0.0, 0.0), vector(1.0, 0.0, 0.0)),
+            (point(0.0, 5.0, -1.0), vector(0.0, 0.0, -1.0)),
+            (point(0.0, -2.0, 1.0), vector(0.0, 0.0, 1.0)),
+            (point(-1.0, 1.0, 0.0), vector(-1.0, 0.0, 0.0)),
+        ];
+        let c = cylinder();
+        for &(p, norm) in examples.iter() {
+            let n = c.local_normal_at(p);
+            assert_eq!(n, norm);
+        }
+    }
+
+    #[test]
+    fn intersect_truncated_cylinder() {
+        let examples = vec![
+            (point(0.0, 1.5, 0.0), vector(0.1, 1.0, 0.0), 0),
+            (point(0.0, 3.0, -5.0), vector(0.0, 0.0, 1.0), 0),
+            (point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0), 0),
+            (point(0.0, 2.0, -5.0), vector(0.0, 0.0, 1.0), 0),
+            (point(0.0, 1.0, -5.0), vector(0.0, 0.0, 1.0), 0),
+            (point(0.0, 1.5, -2.0), vector(0.0, 0.0, 1.0), 2),
+        ];
+        let mut cyl = cylinder();
+        cyl.typ = ShapeType::Cylinder(1.0, 2.0, false);
+        for &(p, dir, count) in examples.iter() {
+            let d = dir.normalize();
+            let r = ray(p, d);
+            let xs = cyl.local_intersect(r);
+            assert_eq!(xs.len(), count);
+        }
+    }
+
+    #[test]
+    fn capped_cylinder() {
+        let examples = vec![
+            (point(0.0, 3.0, 0.0), vector(0.0, -1.0, 0.0), 2),
+            (point(0.0, 3.0, -2.0), vector(0.0, -1.0, 2.0), 2),
+            (point(0.0, 4.0, -2.0), vector(0.0, -1.0, 1.0), 2),
+            (point(0.0, 0.0, -2.0), vector(0.0, 1.0, 2.0), 2),
+            (point(0.0, -1.0, -2.0), vector(0.0, 1.0, 1.0), 2),
+        ];
+        let mut cyl = cylinder();
+        cyl.typ = ShapeType::Cylinder(1.0, 2.0, true);
+        for &(or, dir, count) in examples.iter() {
+            let d = dir.normalize();
+            let r = ray(or, d);
+            let xs = cyl.local_intersect(r);
+            assert_eq!(xs.len(), count);
+        }
+    }
+
+    #[test]
+    fn normal_vector_at_end() {
+        let examples = vec![
+            (point(0.0, 1.0, 0.0), vector(0.0, -1.0, 0.0)),
+            (point(0.5, 1.0, 0.0), vector(0.0, -1.0, 0.0)),
+            (point(0.0, 1.0, 0.5), vector(0.0, -1.0, 0.0)),
+            (point(0.0, 2.0, 0.0), vector(0.0, 1.0, 0.0)),
+            (point(0.5, 2.0, 0.0), vector(0.0, 1.0, 0.0)),
+            (point(0.0, 2.0, 0.5), vector(0.0, 1.0, 0.0)),
+        ];
+        let mut cyl = cylinder();
+        cyl.typ = ShapeType::Cylinder(1.0, 2.0, true);
+        for &(p, norm) in examples.iter() {
+            let n = cyl.local_normal_at(p);
+            assert_eq!(n, norm);
+        }
+    }
+
+    #[test]
+    fn intersecting_a_cone() {
+        let examples = vec![
+            (point(0.0, 0.0, -5.0), vector(0.0, 0.0, 1.0), 5.0, 5.0),
+            (
+                point(0.0, 0.0, -5.0),
+                vector(1.0, 1.0, 1.0),
+                8.66025,
+                8.66025,
+            ),
+            (
+                point(1.0, 1.0, -5.0),
+                vector(-0.5, -1.0, -1.0),
+                4.55006,
+                49.44994,
+            ),
+        ];
+        let shape = cone();
+        for &(or, dir, t0, t1) in examples.iter() {
+            let d = dir.normalize();
+            let r = ray(or, d);
+            let xs = shape.local_intersect(r);
+            assert_eq!(xs.len(), 2);
+            assert!((xs[0].t - t0).abs() < EPSILON);
+            assert!((xs[1].t - t1).abs() < EPSILON);
+        }
+        let dir = vector(0.0, 1.0, 1.0).normalize();
+        let r = ray(point(0.0, 0.0, -1.0), dir);
+        let xs = shape.local_intersect(r);
+        assert_eq!(xs.len(), 1);
+        assert!((xs[0].t - 0.35355).abs() < EPSILON);
     }
 }
